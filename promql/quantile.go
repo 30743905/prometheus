@@ -70,6 +70,8 @@ type metricWithBuckets struct {
 // If q<0, -Inf is returned.
 //
 // If q>1, +Inf is returned.
+// q:分位数    buckets:桶数据
+// bucketQuantile()方法：给定分位数和buckets，返回计算出该百分位的upperBound值(估算值)
 func bucketQuantile(q float64, buckets buckets) float64 {
 	if q < 0 {
 		return math.Inf(-1)
@@ -88,16 +90,20 @@ func bucketQuantile(q float64, buckets buckets) float64 {
 	if len(buckets) < 2 {
 		return math.NaN()
 	}
+	//样本总数量
 	observations := buckets[len(buckets)-1].count
 	if observations == 0 {
 		return math.NaN()
 	}
+	// 统计样本数 = 百分位 * 样本总数量
 	rank := q * observations
 	b := sort.Search(len(buckets)-1, func(i int) bool { return buckets[i].count >= rank })
 
+	// 如果落在最大bucket上(InF)，则返回第二大bucket的upperBound
 	if b == len(buckets)-1 {
 		return buckets[len(buckets)-2].upperBound
 	}
+
 	if b == 0 && buckets[0].upperBound <= 0 {
 		return buckets[0].upperBound
 	}
@@ -111,6 +117,20 @@ func bucketQuantile(q float64, buckets buckets) float64 {
 		count -= buckets[b-1].count
 		rank -= buckets[b-1].count
 	}
+	/**
+	b1[0-1] 3
+	b2[1-2] 5
+	b3[2-3] 10
+
+	q百分位：0.6
+
+	统计样本数：0.6 * （3+5+10） = 10.8
+	b1+b2样本数=8，落在了b3这个bucket上
+
+	预估upperBound:((10.8 - (3+5)) / 10 ) * (3-2) + 2
+
+
+	 */
 	return bucketStart + (bucketEnd-bucketStart)*(rank/count)
 }
 

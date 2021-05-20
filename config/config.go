@@ -384,9 +384,12 @@ type ScrapeConfig struct {
 	Scheme string `yaml:"scheme,omitempty"`
 	// More than this many samples post metric-relabeling will cause the scrape to
 	// fail.
+	//sample_limit： 存储的数据标签个数限制，如果超过限制，该数据将被忽略，不入存储；默认值为0，表示没有限制
+	//每次抓取允许的最大样本数量，如果在指标重打标签后，样本数量仍然超过限制，则整个抓取认为失败，0表示不限制
 	SampleLimit uint `yaml:"sample_limit,omitempty"`
 	// More than this many targets after the target relabeling will cause the
 	// scrapes to fail.
+	// target 数量限制，超过的将被丢弃，目前为实验性功能。0表示不限制，默认0
 	TargetLimit uint `yaml:"target_limit,omitempty"`
 	// More than this many labels post metric-relabeling will cause the scrape to
 	// fail.

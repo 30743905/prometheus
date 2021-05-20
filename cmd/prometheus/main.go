@@ -128,6 +128,7 @@ type flagConfig struct {
 	promlogConfig promlog.Config
 }
 
+// https://prometheus.io/docs/prometheus/latest/disabled_features/
 // setFeatureListOptions sets the corresponding options from the featureList.
 func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 	maxExemplars := c.tsdb.MaxExemplars
@@ -136,20 +137,26 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 	for _, f := range c.featureList {
 		opts := strings.Split(f, ",")
 		for _, o := range opts {
-			switch o {
-			case "promql-at-modifier":
+			switch o {  //https://prometheus.io/docs/prometheus/latest/querying/basics/#modifier
+			case "promql-at-modifier": // 2.25新增
 				c.enablePromQLAtModifier = true
 				level.Info(logger).Log("msg", "Experimental promql-at-modifier enabled")
 			case "promql-negative-offset":
 				c.enablePromQLNegativeOffset = true
 				level.Info(logger).Log("msg", "Experimental promql-negative-offset enabled")
-			case "remote-write-receiver":
+			case "remote-write-receiver"://2.25新增 可以将prometheus当成一个远程写，the remote write receiver endpoint is /api/v1/write
 				c.web.RemoteWriteReceiver = true
 				level.Info(logger).Log("msg", "Experimental remote-write-receiver enabled")
-			case "expand-external-labels":
+			case "expand-external-labels": //2.27新增
 				c.enableExpandExternalLabels = true
 				level.Info(logger).Log("msg", "Experimental expand-external-labels enabled")
 			case "exemplar-storage":
+				/**
+				2.26新增
+				允许使用 --enable-feature=exemplar-storage 标志来启用内存样本存储。其实深挖这个特性的话，背后包含了一套相对完整的理论，
+				这个技术最初是 2018 年 Google 在一次分享中公开的，主要是为了能更好的度量系统的特定域内的性能指标，简单来说就当作是 metrics 系统
+				与 trace 系统结合的一种方式吧，有兴趣的小伙伴可以深入了解下。就目前而言，还有一些问题需要解决；
+				 */
 				c.tsdb.MaxExemplars = maxExemplars
 				level.Info(logger).Log("msg", "Experimental in-memory exemplar storage enabled", "maxExemplars", maxExemplars)
 			case "":
@@ -190,9 +197,11 @@ func main() {
 
 	a.HelpFlag.Short('h')
 
+	// 配置文件
 	a.Flag("config.file", "Prometheus configuration file path.").
 		Default("prometheus.yml").StringVar(&cfg.configFile)
 
+	// 监听端口
 	a.Flag("web.listen-address", "Address to listen on for UI, API, and telemetry.").
 		Default("0.0.0.0:9090").StringVar(&cfg.web.ListenAddress)
 
@@ -205,10 +214,24 @@ func main() {
 	a.Flag("web.max-connections", "Maximum number of simultaneous connections.").
 		Default("512").IntVar(&cfg.web.MaxConnections)
 
+	/**
+
+	--web.external-url=http://{ip或者域名}:9090    #重写了启动的配置参数，其中web.external-url配置问prometheus地址是为了在报警邮件里面点击直接到prometheus的web界面
+
+
+	我在使用alertmanager默认的邮件模板发送告警时候，发现地址取得是docker中的地址，外部是无法访问的，我需要修改externalURL和generatorURL。
+	请问我该如何配置？
+
+	在promethes和alertmanager启动的时候，都加上--web.external-url就可以了
+	./prometheus --config.file=prometheus.yml --web.external-url=http://x.x.x.x:9090
+	./alertmanager --config.file=alertmanager.yml --web.external-url=http://x.x.x.x:9093
+
+	 */
 	a.Flag("web.external-url",
 		"The URL under which Prometheus is externally reachable (for example, if Prometheus is served via a reverse proxy). Used for generating relative and absolute links back to Prometheus itself. If the URL has a path portion, it will be used to prefix all HTTP endpoints served by Prometheus. If omitted, relevant URL components will be derived automatically.").
 		PlaceHolder("<URL>").StringVar(&cfg.prometheusURL)
 
+	//#内部路由的前缀。 默认为--web.external-url的路径。
 	a.Flag("web.route-prefix",
 		"Prefix for the internal routes of web endpoints. Defaults to path of --web.external-url.").
 		PlaceHolder("<path>").StringVar(&cfg.web.RoutePrefix)
@@ -228,12 +251,14 @@ func main() {
 	a.Flag("web.console.libraries", "Path to the console library directory.").
 		Default("console_libraries").StringVar(&cfg.web.ConsoleLibrariesPath)
 
+	// #Prometheus实例页面的文档标题
 	a.Flag("web.page-title", "Document title of Prometheus instance.").
 		Default("Prometheus Time Series Collection and Processing Server").StringVar(&cfg.web.PageTitle)
 
 	a.Flag("web.cors.origin", `Regex for CORS origin. It is fully anchored. Example: 'https?://(domain1|domain2)\.com'`).
 		Default(".*").StringVar(&cfg.corsRegexString)
 
+	// #指标(数据）存储的基本路径
 	a.Flag("storage.tsdb.path", "Base path for metrics storage.").
 		Default("data/").StringVar(&cfg.localStoragePath)
 
@@ -252,12 +277,13 @@ func main() {
 		"Size at which to split the tsdb WAL segment files. Example: 100MB").
 		Hidden().PlaceHolder("<bytes>").BytesVar(&cfg.tsdb.WALSegmentSize)
 
+	//#将数据保留多长时间。 此标志已被弃用，请改用“ storage.tsdb.retention.time”。
 	a.Flag("storage.tsdb.retention", "[DEPRECATED] How long to retain samples in storage. This flag has been deprecated, use \"storage.tsdb.retention.time\" instead.").
 		SetValue(&oldFlagRetentionDuration)
-
+	//#将数据保留多长时间。默认15天
 	a.Flag("storage.tsdb.retention.time", "How long to retain samples in storage. When this flag is set it overrides \"storage.tsdb.retention\". If neither this flag nor \"storage.tsdb.retention\" nor \"storage.tsdb.retention.size\" is set, the retention time defaults to "+defaultRetentionString+". Units Supported: y, w, d, h, m, s, ms.").
 		SetValue(&newFlagRetentionDuration)
-
+   //#可以为块存储的最大字节数。 支持的单位：KB，MB，GB，TB，PB。
 	a.Flag("storage.tsdb.retention.size", "[EXPERIMENTAL] Maximum number of bytes that can be stored for blocks. A unit is required, supported units: B, KB, MB, GB, TB, PB, EB. Ex: \"512MB\". This flag is experimental and can be changed in future releases.").
 		BytesVar(&cfg.tsdb.MaxBytes)
 
@@ -273,18 +299,21 @@ func main() {
 	a.Flag("storage.remote.flush-deadline", "How long to wait flushing sample on shutdown or config reload.").
 		Default("1m").PlaceHolder("<duration>").SetValue(&cfg.RemoteFlushDeadline)
 
+	//#在单个查询中通过远程读取接口返回的最大样本总数。 0表示没有限制。 对于流式响应类型，将忽略此限制。
 	a.Flag("storage.remote.read-sample-limit", "Maximum overall number of samples to return via the remote read interface, in a single query. 0 means no limit. This limit is ignored for streamed response types.").
 		Default("5e7").IntVar(&cfg.web.RemoteReadSampleLimit)
-
+	//#并发远程读取调用的最大数目。 0表示没有限制。
 	a.Flag("storage.remote.read-concurrent-limit", "Maximum number of concurrent remote read calls. 0 means no limit.").
 		Default("10").IntVar(&cfg.web.RemoteReadConcurrencyLimit)
 
+	//#用于流式传输远程读取响应类型的单个帧中的最大字节数。 请注意，客户端也可能会限制帧大小。 1MB为默认情况下由protobuf推荐
 	a.Flag("storage.remote.read-max-bytes-in-frame", "Maximum number of bytes in a single frame for streaming remote read response types before marshalling. Note that client might have limit on frame size as well. 1MB as recommended by protobuf by default.").
 		Default("1048576").IntVar(&cfg.web.RemoteReadBytesInFrame)
 
 	a.Flag("storage.exemplars.exemplars-limit", "[EXPERIMENTAL] Maximum number of exemplars to store in in-memory exemplar storage total. 0 disables the exemplar storage. This flag is effective only with --enable-feature=exemplar-storage.").
 		Default("100000").IntVar(&cfg.tsdb.MaxExemplars)
 
+	//#容忍中断以恢复警报“ for”状态的最长时间。
 	a.Flag("rules.alert.for-outage-tolerance", "Max time to tolerate prometheus outage for restoring \"for\" state of alert.").
 		Default("1h").SetValue(&cfg.outageTolerance)
 
@@ -306,12 +335,15 @@ func main() {
 	a.Flag("query.lookback-delta", "The maximum lookback duration for retrieving metrics during expression evaluations and federation.").
 		Default("5m").SetValue(&cfg.lookbackDelta)
 
+	//#最大查询时间。
 	a.Flag("query.timeout", "Maximum time a query may take before being aborted.").
 		Default("2m").SetValue(&cfg.queryTimeout)
 
+	//#最大查询并发数
 	a.Flag("query.max-concurrency", "Maximum number of queries executed concurrently.").
 		Default("20").IntVar(&cfg.queryConcurrency)
 
+	//#单个查询可以加载到内存中的最大样本数。 请注意，如果查询尝试将更多的样本加载到内存中，则查询将失败，因此这也限制了查询可以返回的样本数。
 	a.Flag("query.max-samples", "Maximum number of samples a single query can load into memory. Note that queries will fail if they try to load more samples than this into memory, so this also limits the number of samples a query can return.").
 		Default("50000000").IntVar(&cfg.queryMaxSamples)
 
@@ -700,13 +732,15 @@ func main() {
 				// it needs to read a valid config for each job.
 				// It depends on the config being in sync with the discovery manager so
 				// we wait until the config is fully loaded.
+				// 当所有配置都准备好
 				<-reloadReady.C
-
+				// 启动scrapeManager
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
 				level.Info(logger).Log("msg", "Scrape manager stopped")
 				return err
 			},
 			func(err error) {
+				// 失败处理
 				// Scrape manager needs to be stopped before closing the local TSDB
 				// so that it doesn't try to write samples to a closed storage.
 				level.Info(logger).Log("msg", "Stopping scrape manager...")

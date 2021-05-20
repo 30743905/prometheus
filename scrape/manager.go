@@ -140,10 +140,12 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 	go m.reloader()
 	for {
 		select {
+		// 触发重新加载目标。添加新增
 		case ts := <-tsets:
 			m.updateTsets(ts)
 
 			select {
+			// 关闭 Scrape Manager 处理信号
 			case m.triggerReload <- struct{}{}:
 			default:
 			}
@@ -153,6 +155,7 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 		}
 	}
 }
+
 
 func (m *Manager) reloader() {
 	ticker := time.NewTicker(5 * time.Second)
@@ -173,25 +176,37 @@ func (m *Manager) reloader() {
 	}
 }
 
+/**
+m.reloade的流程也很简单，setName指我们配置中的job，如果scrapePools不存在该job，则添加，添加前也是先校验该job的配置是否存在，不存在则报错，创建scrape pool。
+总结看就是为每个job创建与之对应的scrape pool
+*/
 func (m *Manager) reload() {
+	//加锁
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
 	for setName, groups := range m.targetSets {
+		//检查该scrape是否存在scrapePools，不存在则创建
 		if _, ok := m.scrapePools[setName]; !ok {
+			//读取该scrape的配置
 			scrapeConfig, ok := m.scrapeConfigs[setName]
 			if !ok {
+				// 未读取到该scrape的配置打印错误
 				level.Error(m.logger).Log("msg", "error reloading target set", "err", "invalid config id:"+setName)
+				// 跳出
 				continue
 			}
+			// 创建该scrape的scrape pool
 			sp, err := newScrapePool(scrapeConfig, m.append, m.jitterSeed, log.With(m.logger, "scrape_pool", setName))
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error creating new scrape pool", "err", err, "scrape_pool", setName)
 				continue
 			}
+			// 保存
 			m.scrapePools[setName] = sp
 		}
 
 		wg.Add(1)
+		// 并行运行，提升性能。
 		// Run the sync in parallel as these take a while and at high load can't catch up.
 		go func(sp *scrapePool, groups []*targetgroup.Group) {
 			sp.Sync(groups)
@@ -199,7 +214,9 @@ func (m *Manager) reload() {
 		}(m.scrapePools[setName], groups)
 
 	}
+	// 释放锁
 	m.mtxScrape.Unlock()
+	// 阻塞，等待所有pool运行完毕
 	wg.Wait()
 }
 
@@ -238,24 +255,28 @@ func (m *Manager) updateTsets(tsets map[string][]*targetgroup.Group) {
 func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	m.mtxScrape.Lock()
 	defer m.mtxScrape.Unlock()
-
+	// 初始化map结构，用于保存配置
 	c := make(map[string]*config.ScrapeConfig)
 	for _, scfg := range cfg.ScrapeConfigs {
+		// 配置读取维度
 		c[scfg.JobName] = scfg
 	}
 	m.scrapeConfigs = c
-
+	// 设置 所有时间序列和警告与外部通信时用的外部标签 external_labels
 	if err := m.setJitterSeed(cfg.GlobalConfig.ExternalLabels); err != nil {
 		return err
 	}
 
 	// Cleanup and reload pool if the configuration has changed.
+	// 如果配置已经更改，清理历史配置，重新加载到池子中
 	var failed bool
 	for name, sp := range m.scrapePools {
+		// 如果当前job不存在，则删除
 		if cfg, ok := m.scrapeConfigs[name]; !ok {
 			sp.stop()
 			delete(m.scrapePools, name)
 		} else if !reflect.DeepEqual(sp.config, cfg) {
+			// 如果配置变更，重新启动reload，进行加载
 			err := sp.reload(cfg)
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error reloading scrape pool", "err", err, "scrape_pool", name)
@@ -263,12 +284,15 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 			}
 		}
 	}
-
+	// 失败 return
 	if failed {
 		return errors.New("failed to apply the new configuration")
 	}
 	return nil
 }
+
+
+
 
 // TargetsAll returns active and dropped targets grouped by job_name.
 func (m *Manager) TargetsAll() map[string][]*Target {

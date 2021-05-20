@@ -156,11 +156,14 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
+	// 遍历已存在target
 	for pk := range m.targets {
 		if _, ok := cfg[pk.setName]; !ok {
+			// 删除标签
 			discoveredTargets.DeleteLabelValues(m.name, pk.setName)
 		}
 	}
+	// 取消所有Discoverer
 	m.cancelDiscoverers()
 	m.targets = make(map[poolKey]map[string]*targetgroup.Group)
 	m.providers = nil
@@ -168,12 +171,18 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 
 	failedCount := 0
 	for name, scfg := range cfg {
+		// 根据scfg，注册服务发现实例
+		/**
+		其中m.registerProviders的主要作用就是根据cfg（配置）注册所有provider实例，保存在m.providers
+		 */
 		failedCount += m.registerProviders(scfg, name)
+		// 设置标签
 		discoveredTargets.WithLabelValues(m.name, name).Set(0)
 	}
 	failedConfigs.WithLabelValues(m.name).Set(float64(failedCount))
 
 	for _, prov := range m.providers {
+		// 启动服务发现实例
 		m.startProvider(m.ctx, prov)
 	}
 
@@ -194,11 +203,13 @@ func (m *Manager) StartCustomProvider(ctx context.Context, name string, worker D
 func (m *Manager) startProvider(ctx context.Context, p *provider) {
 	level.Debug(m.logger).Log("msg", "Starting provider", "provider", p.name, "subs", fmt.Sprintf("%v", p.subs))
 	ctx, cancel := context.WithCancel(ctx)
+	// 记录发现的服务
 	updates := make(chan []*targetgroup.Group)
-
+	// 添加取消方法
 	m.discoverCancel = append(m.discoverCancel, cancel)
-
+	// 执行run  每个服务发现都有自己的run方法。
 	go p.d.Run(ctx, updates)
+	// 更新发现的服务
 	go m.updater(ctx, p, updates)
 }
 
@@ -298,15 +309,21 @@ func (m *Manager) registerProviders(cfgs Configs, setName string) int {
 		failed int
 		added  bool
 	)
+	// 加载Providers的add方法
 	add := func(cfg Config) {
 		for _, p := range m.providers {
+			//检查cfg是否加载过
 			if reflect.DeepEqual(cfg, p.config) {
+				//如果加载过，记录该job
 				p.subs = append(p.subs, setName)
+				//变更标签状态
 				added = true
+				//跳出
 				return
 			}
 		}
 		typ := cfg.Name()
+		//创建一个Discover实例
 		d, err := cfg.NewDiscoverer(DiscovererOptions{
 			Logger: log.With(m.logger, "discovery", typ),
 		})
@@ -315,12 +332,18 @@ func (m *Manager) registerProviders(cfgs Configs, setName string) int {
 			failed++
 			return
 		}
+		// 创建一个provider
 		m.providers = append(m.providers, &provider{
+			// 生成provider名称
 			name:   fmt.Sprintf("%s/%d", typ, len(m.providers)),
+			// 关联对应的Discoverer实例（比如DNS、zk等）
 			d:      d,
+			// 关联配置
 			config: cfg,
+			// 关联job
 			subs:   []string{setName},
 		})
+		// 更新标签
 		added = true
 	}
 	for _, cfg := range cfgs {
