@@ -16,17 +16,16 @@ package scrape
 import (
 	"encoding"
 	"fmt"
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
+	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"hash/fnv"
 	"net"
 	"os"
 	"reflect"
 	"sync"
 	"time"
-
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
-	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
@@ -101,6 +100,10 @@ func (mc *MetadataMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // NewManager is the Manager constructor
+/**
+  NewManager方法实例化结构体Manager：
+  结构体Manager维护map类型的scrapePools和targetSets，两者key都是job_name，但scrapePools的value对应结构体scrapepool，而targetSets的value对应的结构体是Group
+ */
 func NewManager(logger log.Logger, app storage.Appendable) *Manager {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -120,32 +123,47 @@ func NewManager(logger log.Logger, app storage.Appendable) *Manager {
 
 // Manager maintains a set of scrape pools and manages start/stop cycles
 // when receiving new target groups form the discovery manager.
+/**
+结构体Manager维护map类型的scrapePools和targetSets，两者key都是job_name，但scrapePools的value对应结构体scrapepool，而targetSets的value对应的结构体是Group
+ */
 type Manager struct {
-	logger    log.Logger
-	append    storage.Appendable
-	graceShut chan struct{}
+	logger    log.Logger  //系统日志
+	append    storage.Appendable  //存储监控指标
+	graceShut chan struct{}  //退出
 
 	jitterSeed    uint64     // Global jitterSeed seed is used to spread scrape workload across HA setup.
-	mtxScrape     sync.Mutex // Guards the fields below.
-	scrapeConfigs map[string]*config.ScrapeConfig
-	scrapePools   map[string]*scrapePool
-	targetSets    map[string][]*targetgroup.Group
+	mtxScrape     sync.Mutex // Guards the fields below.  读写锁
+	scrapeConfigs map[string]*config.ScrapeConfig  //prometheus.yml的srape_config配置部分，key对应job_name，value对应job_name的配置参数
+	scrapePools   map[string]*scrapePool           //key对应job_name，value对应结构体scrapePool，包含该job_name下所有的targets
+	targetSets    map[string][]*targetgroup.Group  //key对应job_name，value对应结构体Group，包含job_name对应的Targets，Labels和Source
 
-	triggerReload chan struct{}
+	triggerReload chan struct{}   //若有新的服务(targets)通过服务发现(serviceDisvoer)传过来，会向该管道传值，触发加载配置文件操作
 }
 
 // Run receives and saves target set updates and triggers the scraping loops reloading.
 // Reloading happens in the background so that it doesn't block receiving targets updates.
+/**
+指标采集(scrapeManager)在main.go启动时，会起一个协程运行Run方法，从服务发现(serviceDiscover)实时获取被监控服务(targets)
+ */
 func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
+	//定时(5s)更新服务(targets)，结合triggerReload一起使用，即每5s判断一次triggerReload是否更新．
+	/**
+	若服务发现(serviceDiscovery)有服务(target)变动，Run方法就会向管道triggerReload注入值：m.triggerReload <- struct{}{}中，
+	并起了一个协程，运行reloader方法．用于定时更新服务(targets)．启动这个协程应该是为了防止阻塞从服务发现(serviceDiscover)获取变动的服务(targets)
+
+	reloader方法启动了一个定时器，在无限循环中每5s判断一下管道triggerReload，若有值，则执行reload方法．
+	 */
 	go m.reloader()
 	for {
 		select {
 		// 触发重新加载目标。添加新增
+		//通过管道获取被监控的服务(targets)
 		case ts := <-tsets:
 			m.updateTsets(ts)
 
 			select {
 			// 关闭 Scrape Manager 处理信号
+			//若从服务发现 (serviceDiscover)有服务(targets)变动，则给管道triggerReload传值，并触发reloader()方法更新服务
 			case m.triggerReload <- struct{}{}:
 			default:
 			}
@@ -158,6 +176,7 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 
 
 func (m *Manager) reloader() {
+	//定时器5s
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -165,6 +184,7 @@ func (m *Manager) reloader() {
 		select {
 		case <-m.graceShut:
 			return
+			// 若服务发现(serviceDiscovery)有服务(targets)变动，就会向管道triggerReload写入值，定时器每5s判断一次triggerReload管道是否有值，若有值，则触发reload方法
 		case <-ticker.C:
 			select {
 			case <-m.triggerReload:
@@ -179,16 +199,24 @@ func (m *Manager) reloader() {
 /**
 m.reloade的流程也很简单，setName指我们配置中的job，如果scrapePools不存在该job，则添加，添加前也是先校验该job的配置是否存在，不存在则报错，创建scrape pool。
 总结看就是为每个job创建与之对应的scrape pool
+
+reload方法会根据job_name比较targetSets，scrapePools和scrapeConfigs的一致性，并把每个job_name下的类型为[]*targetgroup.Group的groups通过协程传给sp.Sync方法，增加并发．
+
 */
 func (m *Manager) reload() {
 	//加锁
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
+	//setName对应job_name，
+	//group的结构体包含job_name对应的Targets，Labels和source
 	for setName, groups := range m.targetSets {
 		//检查该scrape是否存在scrapePools，不存在则创建
 		if _, ok := m.scrapePools[setName]; !ok {
 			//读取该scrape的配置
 			scrapeConfig, ok := m.scrapeConfigs[setName]
+			//若该job_name不在scrapePools中，分为两种情况处理
+			//(1)job_name不在scrapeConfigs中，则报错
+			//(2)job_name在scrapeConfigs中，则需要把该job_name加到scrapePools中
 			if !ok {
 				// 未读取到该scrape的配置打印错误
 				level.Error(m.logger).Log("msg", "error reloading target set", "err", "invalid config id:"+setName)
@@ -209,6 +237,7 @@ func (m *Manager) reload() {
 		// 并行运行，提升性能。
 		// Run the sync in parallel as these take a while and at high load can't catch up.
 		go func(sp *scrapePool, groups []*targetgroup.Group) {
+			//把groups转换为targets类型
 			sp.Sync(groups)
 			wg.Done()
 		}(m.scrapePools[setName], groups)

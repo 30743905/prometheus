@@ -2,11 +2,8 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="14c27b97-c599-4723-8cf7-faf7cfe7f679" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cmd/prometheus/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/prometheus/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/config/config.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/discovery/manager.go" beforeDir="false" afterPath="$PROJECT_DIR$/discovery/manager.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/discovery/refresh/refresh.go" beforeDir="false" afterPath="$PROJECT_DIR$/discovery/refresh/refresh.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/promql/quantile.go" beforeDir="false" afterPath="$PROJECT_DIR$/promql/quantile.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/scrape/manager.go" beforeDir="false" afterPath="$PROJECT_DIR$/scrape/manager.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/scrape/scrape.go" beforeDir="false" afterPath="$PROJECT_DIR$/scrape/scrape.go" afterDir="false" />
     </list>

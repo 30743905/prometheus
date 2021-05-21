@@ -445,6 +445,9 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 
 // Sync converts target groups into actual scrape targets and synchronizes
 // the currently running scraper with the resulting set and returns all scraped and dropped targets.
+/**
+sp.Sync方法引入了Target结构体，把[]*targetgroup.Group类型的groups转换为targets类型，其中每个groups对应一个job_name下多个targets．随后，调用sp.sync方法，同步scrape服务
+ */
 func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	sp.mtx.Lock()
 	defer sp.mtx.Unlock()
@@ -456,19 +459,23 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	// 遍历所有Group
 	for _, tg := range tgs {
 		// 转化对应 targets
+		//转换targetgroup.Group类型为Target
 		targets, err := targetsFromGroup(tg, sp.config)
 		if err != nil {
 			level.Error(sp.logger).Log("msg", "creating targets failed", "err", err)
 			continue
 		}
 		// 将所有有效targets添加到all，等待处理
+		// 这里有个疑问，tg对应一个target，为什么返回回来的targets不是对应一个target相关参数，需要用for循环？
 		for _, t := range targets {
 			// 检查该target的lable是否有效
+			// 判断Target的有效label是否大于0
 			if t.Labels().Len() > 0 {
 				// 添加到all队列中
 				all = append(all, t)
 			} else if t.DiscoveredLabels().Len() > 0 {
 				// 记录无效target
+				// 若为无效Target，则加入scrapeLoop的droppedTargets中
 				sp.droppedTargets = append(sp.droppedTargets, t)
 			}
 		}
@@ -476,9 +483,10 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	sp.targetMtx.Unlock()
 
 	/**
-	在sync最后，调用了当前scrape pool的sync去处理all队列中的target，添加新的target，删除失效的target。
+	处理all队列，执行scrape同步操作：在sync最后，调用了当前scrape pool的sync去处理all队列中的target，添加新的target，删除失效的target。
 
-	处理all队列，执行scrape同步操作
+	sp.sync方法对比新的Target列表和原来的Target列表，若发现不在原来的Target列表中，则新建该targets的scrapeLoop，
+	通过协程启动scrapeLoop的run方法，并发采集存储指标．然后判断原来的Target列表是否存在失效的Target，若存在，则移除
 	 */
 	sp.sync(all)
 
@@ -497,8 +505,9 @@ func (sp *scrapePool) sync(targets []*Target) {
 		uniqueLoops = make(map[uint64]loop)
 		// 采集周期
 		interval    = time.Duration(sp.config.ScrapeInterval)
-		// 采集超时时间
+		// 指标采集超时时间
 		timeout     = time.Duration(sp.config.ScrapeTimeout)
+		// 指标采集的限额
 		sampleLimit = int(sp.config.SampleLimit)
 		labelLimits = &labelLimits{
 			labelLimit:            int(sp.config.LabelLimit),
@@ -518,6 +527,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 		hash := t.hash()
 
 		// 判断该target是否已经在运行了。如果没有则运行该target对应的loop，将该loop加入activeTargets中
+		// 若发现不在原来的Target列表中，则新建该target的scrapeLoop
 		if _, ok := sp.activeTargets[hash]; !ok {
 			s := &targetScraper{Target: t, client: sp.client, timeout: timeout}
 			l := sp.newLoop(scrapeLoopOptions{
@@ -551,6 +561,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 	// 停止并且移除无效的targets与对应的loops
 	// 遍历activeTargets正在执行的Target
 	// Stop and remove old targets and scraper loops.
+	// 判断原来的Target列表是否存在失效的Target，若存在则移除
 	for hash := range sp.activeTargets {
 		// 检查该hash对应的标记是否存在，放过不存在执行清除逻辑
 		if _, ok := uniqueLoops[hash]; !ok {
@@ -578,6 +589,8 @@ func (sp *scrapePool) sync(targets []*Target) {
 	}
 	for _, l := range uniqueLoops {
 		if l != nil {
+			// 通过协程启动scrapeLoop的run方法，采集存储指标
+			// sp.sync方法起了一个协程运行scrapeLoop的run方法去采集并存储监控指标(metrics)，run方法实现如下：
 			go l.run(interval, timeout, nil)
 		}
 	}
@@ -796,12 +809,14 @@ type loop interface {
 	getCache() *scrapeCache
 	disableEndOfRunStalenessMarkers()
 }
-
+/**
+	添加到本地数据库或者远程数据库的一个返回值:
+ */
 type cacheEntry struct {
 	ref      uint64
-	lastIter uint64
-	hash     uint64
-	lset     labels.Labels
+	lastIter uint64		//上一个版本号
+	hash     uint64		// hash值
+	lset     labels.Labels	//包含的labels
 }
 
 type scrapeLoop struct {
@@ -832,28 +847,28 @@ type scrapeLoop struct {
 // storage references. Additionally, it tracks staleness of series between
 // scrapes.
 type scrapeCache struct {
-	iter uint64 // Current scrape iteration.
+	iter uint64 // Current scrape iteration.  //被缓存的迭代次数
 
 	// How many series and metadata entries there were at the last success.
 	successfulCount int
 
 	// Parsed string to an entry with information about the actual label set
 	// and its storage reference.
-	series map[string]*cacheEntry
+	series map[string]*cacheEntry  //map类型,key是metric,value是cacheEntry结构体
 
 	// Cache of dropped metric strings and their iteration. The iteration must
 	// be a pointer so we can update it without setting a new entry with an unsafe
 	// string in addDropped().
-	droppedSeries map[string]*uint64
+	droppedSeries map[string]*uint64  //缓存不合法指标(metrics)
 
 	// seriesCur and seriesPrev store the labels of series that were seen
 	// in the current and previous scrape.
 	// We hold two maps and swap them out to save allocations.
-	seriesCur  map[uint64]labels.Labels
-	seriesPrev map[uint64]labels.Labels
+	seriesCur  map[uint64]labels.Labels   //缓存本次scrape的指标(metrics)
+	seriesPrev map[uint64]labels.Labels   //缓存上次scrape的指标(metrics)
 
-	metaMtx  sync.Mutex
-	metadata map[string]*metaEntry
+	metaMtx  sync.Mutex  //同步锁
+	metadata map[string]*metaEntry   //元数据
 }
 
 // metaEntry holds meta information about a metric.
@@ -913,25 +928,31 @@ func (c *scrapeCache) iterDone(flushCache bool) {
 		c.metaMtx.Lock()
 		for m, e := range c.metadata {
 			// Keep metadata around for 10 scrapes after its metric disappeared.
+			// 保留最近十个版本的metadata
 			if c.iter-e.lastIter > 10 {
 				delete(c.metadata, m)
 			}
 		}
 		c.metaMtx.Unlock()
 
+		//迭代版本号自增
 		c.iter++
 	}
 
 	// Swap current and previous series.
+	// 把上次采集的指标(metircs)集合和本次采集的指标集(metrics)互换
 	c.seriesPrev, c.seriesCur = c.seriesCur, c.seriesPrev
 
 	// We have to delete every single key in the map.
 	for k := range c.seriesCur {
+		// 删除本地获取的指标集(metrics)
 		delete(c.seriesCur, k)
 	}
 }
 
+//根据指标(metrics)信息获取结构体cacheEntry
 func (c *scrapeCache) get(met string) (*cacheEntry, bool) {
+	//series是map类型,key是metric,value是结构体cachaEntry
 	e, ok := c.series[met]
 	if !ok {
 		return nil, false
@@ -940,19 +961,25 @@ func (c *scrapeCache) get(met string) (*cacheEntry, bool) {
 	return e, true
 }
 
+//根据指标(metircs)信息添加该meitric的结构体cacheEntry
 func (c *scrapeCache) addRef(met string, ref uint64, lset labels.Labels, hash uint64) {
 	if ref == 0 {
 		return
 	}
+	// series是map类型, key为metric, value是结构体cacheEntry
 	c.series[met] = &cacheEntry{ref: ref, lastIter: c.iter, lset: lset, hash: hash}
 }
 
+//添加无效指标(metrics)到map类型droppedSeries
 func (c *scrapeCache) addDropped(met string) {
 	iter := c.iter
+	// droppedSeries是map类型,以metric作为key, 版本作为value
 	c.droppedSeries[met] = &iter
 }
 
+//判断指标(metrics)的合法性
 func (c *scrapeCache) getDropped(met string) bool {
+	// 判断metric是否在非法的dropperSeries的map类型里, key是metric, value是迭代版本号
 	iterp, ok := c.droppedSeries[met]
 	if ok {
 		*iterp = c.iter
@@ -960,12 +987,15 @@ func (c *scrapeCache) getDropped(met string) bool {
 	return ok
 }
 
+//添加不带时间戳的指标(metrics)到map类型seriesCur,以metric lset的hash值作为唯一标识
 func (c *scrapeCache) trackStaleness(hash uint64, lset labels.Labels) {
 	c.seriesCur[hash] = lset
 }
 
+// 比较两个map：seriesCur和seriesPrev，查找过期指标
 func (c *scrapeCache) forEachStale(f func(labels.Labels) bool) {
 	for h, lset := range c.seriesPrev {
+		// 判断之前的metric是否在当前的seriesCur里.
 		if _, ok := c.seriesCur[h]; !ok {
 			if !f(lset) {
 				break
@@ -1112,10 +1142,15 @@ func newScrapeLoop(ctx context.Context,
 	return sl
 }
 
+/**
+sp.sync方法起了一个协程运行scrapePool的run方法去采集并存储监控指标(metrics)，run方法实现如下：
+ */
 func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	select {
+	//检测超时
 	case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
 		// Continue after a scraping offset.
+		//停止，退出
 	case <-sl.ctx.Done():
 		close(sl.stopped)
 		return
@@ -1125,6 +1160,7 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 
 	alignedScrapeTime := time.Now().Round(0)
 	// 根据interval设置定时器
+	//设置定时器
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1157,6 +1193,10 @@ mainLoop:
 			}
 		}
 
+		/**
+		scrapeAndReport方法主要实现两个功能：指标采集(scrape)和指标存储．此外，为了实现对象的复用，在采集(scrape)过程中，使用了sync.Pool机制提高性能，
+		即每次采集(scrape)完成后，都会申请和本次采集(scrape)指标存储空间一样的大小的bytes，加入到buffer中，以备下次指标采集(scrape)直接使用．
+		 */
 		last = sl.scrapeAndReport(interval, timeout, last, scrapeTime, errc)
 
 		select {
@@ -1192,9 +1232,11 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 		)
 	}
 	// 根据上次拉取数据的大小，设置buffer空间
+	// 获取上次scrape(拉取)指标(metric)占用空间
 	b := sl.buffers.Get(sl.lastScrapeSize).([]byte)
 	// 对象复用
 	defer sl.buffers.Put(b)
+	//根据上次的占用的空间申请存储空间
 	buf := bytes.NewBuffer(b)
 
 	var total, added, seriesAdded int
@@ -1237,6 +1279,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 	var contentType string
 	scrapeCtx, cancel := context.WithTimeout(sl.parentCtx, timeout)
 	// 读取数据，设置到buffer中
+	//开始scrape(拉取)指标
 	contentType, scrapeErr = sl.scraper.scrape(scrapeCtx, buf)
 	// 取消，结束scrape
 	cancel()
@@ -1248,6 +1291,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 		// to falsely reset our buffer size.
 		if len(b) > 0 {
 			// 记录本次Scrape大小
+			//存储本次scrape拉取磁盘占用的空间，留待下次scrape(拉取)使用
 			sl.lastScrapeSize = len(b)
 		}
 	} else {
@@ -1261,6 +1305,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 	// A failed scrape is the same as an empty scrape,
 	// we still call sl.append to trigger stale markers.
 	// 生成数据，存储指标
+	//存储指标
 	total, added, seriesAdded, appErr = sl.append(app, b, contentType, appendTime)
 	if appErr != nil {
 		app.Rollback()

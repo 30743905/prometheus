@@ -465,10 +465,19 @@ func main() {
 	level.Info(logger).Log("fd_limits", prom_runtime.FdLimits())
 	level.Info(logger).Log("vm_limits", prom_runtime.VMLimits())
 
+	/**
+	Storage组件初始化
+
+	Prometheus的Storage组件是时序数据库，包含两个：localStorage和remoteStorage．localStorage当前版本指TSDB，
+	用于对metrics的本地存储存储，remoteStorage用于metrics的远程存储，其中fanoutStorage作为localStorage和remoteStorage的读写代理服务器
+	 */
 	var (
+		// 本地存储
 		localStorage  = &readyStorage{}
 		scraper       = &readyScrapeManager{}
+		// 远程存储
 		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), prometheus.DefaultRegisterer, localStorage.StartTime, cfg.localStoragePath, time.Duration(cfg.RemoteFlushDeadline), scraper)
+		// 读写代理服务器
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 
@@ -476,30 +485,55 @@ func main() {
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
 
+		/**
+		notifier组件用于发送告警信息给AlertManager，通过方法notifier.NewManager完成初始化
+		 */
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
+
+		/**
+		discoveryManagerScrape组件用于服务发现，当前版本支持多种服务发现系统，比如kuberneters等，
+		通过方法discovery.NewManager完成初始化，
+		 */
 		discoveryManagerScrape  = discovery.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), discovery.Name("scrape"))
 
 		ctxNotify, cancelNotify = context.WithCancel(context.Background())
+
+		/**
+		discoveryManagerNotify组件用于告警通知服务发现，比如AlertManager服务．也是通过方法discovery.NewManager完成初始化，
+		不同的是，discoveryManagerNotify服务于notify，而discoveryManagerScrape服务与scrape
+		 */
 		discoveryManagerNotify  = discovery.NewManager(ctxNotify, log.With(logger, "component", "discovery manager notify"), discovery.Name("notify"))
 
+		/**
+		scrapeManager组件利用discoveryManagerScrape组件发现的targets，抓取对应targets的所有metrics，
+		并将抓取的metrics存储到fanoutStorage中，通过方法scrape.NewManager完成初始化
+
+		fanoutStorage是监控的存储的抽象
+		*/
 		scrapeManager = scrape.NewManager(log.With(logger, "component", "scrape manager"), fanoutStorage)
 
+		/**
+		queryEngine组件用于rules查询和计算，通过方法promql.NewEngine完成初始化
+		 */
 		opts = promql.EngineOpts{
 			Logger:                   log.With(logger, "component", "query engine"),
 			Reg:                      prometheus.DefaultRegisterer,
 			MaxSamples:               cfg.queryMaxSamples,
-			Timeout:                  time.Duration(cfg.queryTimeout),
+			Timeout:                  time.Duration(cfg.queryTimeout), // 查询超时时
 			ActiveQueryTracker:       promql.NewActiveQueryTracker(cfg.localStoragePath, cfg.queryConcurrency, log.With(logger, "component", "activeQueryTracker")),
 			LookbackDelta:            time.Duration(cfg.lookbackDelta),
 			NoStepSubqueryIntervalFn: noStepSubqueryInterval.Get,
 			EnableAtModifier:         cfg.enablePromQLAtModifier,
 			EnableNegativeOffset:     cfg.enablePromQLNegativeOffset,
 		}
-
 		queryEngine = promql.NewEngine(opts)
 
+		/**
+		ruleManager组件通过方法rules.NewManager完成初始化．其中rules.NewManager的参数涉及多个组件：存储，queryEngine和notifier，
+		整个流程包含rule计算和发送告警
+		 */
 		ruleManager = rules.NewManager(&rules.ManagerOptions{
 			Appendable:      fanoutStorage,
 			Queryable:       localStorage,
@@ -517,6 +551,9 @@ func main() {
 
 	scraper.Set(scrapeManager)
 
+	/**
+	Web组件用于为Storage组件，queryEngine组件，scrapeManager组件， ruleManager组件和notifier 组件提供外部HTTP访问方式，初始化代码如下:
+	 */
 	cfg.web.Context = ctxWeb
 	cfg.web.TSDBRetentionDuration = cfg.tsdb.RetentionDuration
 	cfg.web.TSDBMaxBytes = cfg.tsdb.MaxBytes
@@ -559,12 +596,18 @@ func main() {
 		conntrack.DialWithTracing(),
 	)
 
+	/**
+	服务组件remoteStorage，webHandler，notifierManager和ScrapeManager的ApplyConfig方法，
+	参数cfg *config.Config中传递的配置文件，是整个文件prometheus.yml
+	 */
 	reloaders := []reloader{
 		{
 			name:     "remote_storage",
+			// 存储配置
 			reloader: remoteStorage.ApplyConfig,
 		}, {
 			name:     "web_handler",
+			// web配置
 			reloader: webHandler.ApplyConfig,
 		}, {
 			name: "query_engine",
@@ -585,9 +628,11 @@ func main() {
 			// The Scrape and notifier managers need to reload before the Discovery manager as
 			// they need to read the most updated config when receiving the new targets list.
 			name:     "scrape",
+			// scrapeManger配置
 			reloader: scrapeManager.ApplyConfig,
 		}, {
 			name: "scrape_sd",
+			//从配置文件中提取Section:scrape_configs
 			reloader: func(cfg *config.Config) error {
 				c := make(map[string]discovery.Configs)
 				for _, v := range cfg.ScrapeConfigs {
@@ -597,9 +642,11 @@ func main() {
 			},
 		}, {
 			name:     "notify",
+			// notifier配置
 			reloader: notifierManager.ApplyConfig,
 		}, {
 			name: "notify_sd",
+			//从配置文件中提取Section:alerting
 			reloader: func(cfg *config.Config) error {
 				c := make(map[string]discovery.Configs)
 				for k, v := range cfg.AlertingConfig.AlertmanagerConfigs.ToMap() {
@@ -609,6 +656,7 @@ func main() {
 			},
 		}, {
 			name: "rules",
+			//从配置文件中提取Section:rule_files
 			reloader: func(cfg *config.Config) error {
 				// Get all rule files matching the configuration paths.
 				var files []string
@@ -671,6 +719,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	/**
+	对象g中包含各个服务组件的入口，通过调用Add方法把把这些入口添加到对象g中
+	 */
 	var g run.Group
 	{
 		// Termination handler.
@@ -726,6 +777,7 @@ func main() {
 	}
 	{
 		// Scrape manager.
+		//通过方法Add，把ScrapeManager组件添加到g中
 		g.Add(
 			func() error {
 				// When the scrape manager receives a new targets list
@@ -735,6 +787,7 @@ func main() {
 				// 当所有配置都准备好
 				<-reloadReady.C
 				// 启动scrapeManager
+				//ScrapeManager组件的启动函数
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
 				level.Info(logger).Log("msg", "Scrape manager stopped")
 				return err
@@ -924,6 +977,10 @@ func main() {
 			},
 		)
 	}
+
+	/**
+	通过对象g，调用方法run，启动所有服务组件
+	 */
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
@@ -985,6 +1042,9 @@ type reloader struct {
 	reloader func(*config.Config) error
 }
 
+/**
+通过reloadConfig方法，加载各个服务组件的配置项
+ */
 func reloadConfig(filename string, expandExternalLabels bool, logger log.Logger, noStepSuqueryInterval *safePromQLNoStepSubqueryInterval, rls ...reloader) (err error) {
 	start := time.Now()
 	timings := []interface{}{}
@@ -1005,6 +1065,7 @@ func reloadConfig(filename string, expandExternalLabels bool, logger log.Logger,
 	}
 
 	failed := false
+	//通过一个for循环，加载各个服务组件的配置项
 	for _, rl := range rls {
 		rstart := time.Now()
 		if err := rl.reloader(conf); err != nil {
