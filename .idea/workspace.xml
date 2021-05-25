@@ -4,7 +4,12 @@
     <list default="true" id="14c27b97-c599-4723-8cf7-faf7cfe7f679" name="Default Changelist" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cmd/prometheus/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/prometheus/main.go" afterDir="false" />
+<<<<<<< HEAD
       <change beforePath="$PROJECT_DIR$/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/config/config.go" afterDir="false" />
+=======
+      <change beforePath="$PROJECT_DIR$/scrape/manager.go" beforeDir="false" afterPath="$PROJECT_DIR$/scrape/manager.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/scrape/scrape.go" beforeDir="false" afterPath="$PROJECT_DIR$/scrape/scrape.go" afterDir="false" />
+>>>>>>> 8670d0c7fda72ae9bc6f52d2aaa6ef210534391a
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
