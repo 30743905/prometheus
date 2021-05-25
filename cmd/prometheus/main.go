@@ -352,6 +352,7 @@ func main() {
 
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
 
+	// parse方法解析命令行参数
 	_, err := a.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
