@@ -291,6 +291,7 @@ func checkFileExists(fn string) error {
 func checkConfig(filename string) ([]string, error) {
 	fmt.Println("Checking", filename)
 
+	// 加载prometheus yaml配置文件
 	cfg, err := config.LoadFile(filename, false, log.NewNopLogger())
 	if err != nil {
 		return nil, err

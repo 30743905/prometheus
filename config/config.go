@@ -98,14 +98,14 @@ func Load(s string, expandExternalLabels bool, logger log.Logger) (*Config, erro
 
 // LoadFile parses the given YAML file into a Config.
 func LoadFile(filename string, expandExternalLabels bool, logger log.Logger) (*Config, error) {
-	level.Info(logger).Log("--->开始加载配置文件LoadFile:", filename, expandExternalLabels)
+	level.Info(logger).Log("--->LoadFile:", filename, expandExternalLabels)
 	content, err := ioutil.ReadFile(filename)
 	level.Info(logger).Log("--->LoadFile:content:", content)
 	if err != nil {
 		return nil, err
 	}
 	cfg, err := Load(string(content), expandExternalLabels, logger)
-	level.Info(logger).Log("--->LoadFile:cfg:", cfg)
+	level.Info(logger).Log("--->LoadFile:cfg:", content)
 	if err != nil {
 		return nil, errors.Wrapf(err, "parsing YAML file %s", filename)
 	}

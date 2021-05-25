@@ -75,6 +75,7 @@ import (
 )
 
 var (
+	// 声明两个程序自身的监控指标
 	configSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "prometheus_config_last_reload_successful",
 		Help: "Whether the last configuration reload attempt was successful.",
@@ -180,6 +181,7 @@ func main() {
 		newFlagRetentionDuration model.Duration
 	)
 
+	// 创建实体
 	cfg := flagConfig{
 		notifier: notifier.Options{
 			Registerer: prometheus.DefaultRegisterer,
@@ -384,6 +386,7 @@ func main() {
 	}
 
 	// Throw error for invalid config before starting other components.
+	// 加载prometheus yaml配置文件
 	if _, err := config.LoadFile(cfg.configFile, false, log.NewNopLogger()); err != nil {
 		level.Error(logger).Log("msg", fmt.Sprintf("Error loading config (--config.file=%s)", cfg.configFile), "err", err)
 		os.Exit(2)
@@ -1060,6 +1063,7 @@ func reloadConfig(filename string, expandExternalLabels bool, logger log.Logger,
 		}
 	}()
 
+	// 加载prometheus yaml配置文件
 	conf, err := config.LoadFile(filename, expandExternalLabels, logger)
 	if err != nil {
 		return errors.Wrapf(err, "couldn't load configuration (--config.file=%q)", filename)
@@ -1069,6 +1073,9 @@ func reloadConfig(filename string, expandExternalLabels bool, logger log.Logger,
 	//通过一个for循环，加载各个服务组件的配置项
 	for _, rl := range rls {
 		rstart := time.Now()
+		/**
+		调用各个组件的func (m *Manager) ApplyConfig(cfg map[string]Configs)方法
+		 */
 		if err := rl.reloader(conf); err != nil {
 			level.Error(logger).Log("msg", "Failed to apply configuration", "err", err)
 			failed = true
