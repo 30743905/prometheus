@@ -153,6 +153,8 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 
 	reloader方法启动了一个定时器，在无限循环中每5s判断一下管道triggerReload，若有值，则执行reload方法．
 	 */
+
+	level.Info(m.logger).Log("--------->tsets:", tsets)
 	go m.reloader()
 	for {
 		select {
@@ -160,6 +162,7 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 		//通过管道获取被监控的服务(targets)
 		case ts := <-tsets:
 			m.updateTsets(ts)
+			level.Info(m.logger).Log("--------->ts:", tsets)
 
 			select {
 			// 关闭 Scrape Manager 处理信号

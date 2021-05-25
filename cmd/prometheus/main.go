@@ -660,6 +660,17 @@ func main() {
 			reloader: func(cfg *config.Config) error {
 				// Get all rule files matching the configuration paths.
 				var files []string
+
+				//todo
+				level.Info(logger).Log("----***>>>>>msg", "Server is ready to receive web requests.")
+				level.Info(logger).Log("----***>>>>>cfg", cfg.RuleFiles)
+
+				if len(cfg.RuleFiles) > 0 {
+					level.Info(logger).Log("----***>>>>>cfg222", cfg.RuleFiles[0])
+				}
+
+					level.Info(logger).Log("----***>>>>>cfg", cfg)
+
 				for _, pat := range cfg.RuleFiles {
 					fs, err := filepath.Glob(pat)
 					if err != nil {
