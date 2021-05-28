@@ -16,6 +16,9 @@ package relabel
 import (
 	"crypto/md5"
 	"fmt"
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
+	"os"
 	"regexp"
 	"strings"
 
@@ -54,6 +57,13 @@ const (
 	LabelDrop Action = "labeldrop"
 	// LabelKeep drops any label not matching the regex.
 	LabelKeep Action = "labelkeep"
+)
+
+var(
+	logger = log.NewLogfmtLogger(log.NewSyncWriter(os.Stdout))
+	//level.Info(logger).Log("-------++--->>>>", val)
+	//logger1 = log.With(logger1, "ts", log.DefaultTimestamp)
+	//logger1 = log.With(logger1, "caller", log.DefaultCaller)
 )
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface.
@@ -190,12 +200,33 @@ func Process(labels labels.Labels, cfgs ...*Config) labels.Labels {
 	return labels
 }
 
+
+
+/**
+	relabel_configs场景：
+	lset：job、__scheme__、__metrics_path__、__address__
+	cfg: target下配置的relabel_configs其中一条规则配置
+
+    metric_relabel_configs场景：
+	lset：instance、job、__name__、指标标签
+	cfg: target下配置的metric_relabel_configs其中一条规则配置
+ */
 func relabel(lset labels.Labels, cfg *Config) labels.Labels {
 	values := make([]string, 0, len(cfg.SourceLabels))
 	for _, ln := range cfg.SourceLabels {
 		values = append(values, lset.Get(string(ln)))
 	}
 	val := strings.Join(values, cfg.Separator)
+
+	//fmt.Println("-------++--->>>>", val)
+
+	logger = log.With(logger, "ts", log.DefaultTimestamp)
+	logger = log.With(logger, "caller", log.DefaultCaller)
+	level.Info(logger).Log("-------++--->>>>", val)
+	//logger = log.With(logger, "ts", log.DefaultTimestamp)
+	//logger = log.With(logger, "caller", log.DefaultCaller)
+
+
 
 	lb := labels.NewBuilder(lset)
 
@@ -225,9 +256,28 @@ func relabel(lset labels.Labels, cfg *Config) labels.Labels {
 			break
 		}
 		lb.Set(string(target), string(res))
+		// 将target_label设置为串联的source_labels的哈希的模数。
+	//relabel_configs:
+	//	- source_labels: [ '__address__' ]
+	//    modulus: 10
+	//    target_label: tmp_hash
+	//	  action: hashmod
 	case HashMod:
 		mod := sum64(md5.Sum([]byte(val))) % cfg.Modulus
 		lb.Set(cfg.TargetLabel, fmt.Sprintf("%d", mod))
+		/**
+		labelmap会根据regex去匹配Target实例所有标签的名称（注意是名称），并且将捕获到的内容作为为新的标签名称，
+		regex匹配到标签的的值作为新标签的值。
+
+		labelmap: 将正则表达式与所有标签名称匹配。 然后，将匹配标签的值复制到通过替换为它们的值替换的匹配组引用(${1}, ${2}, ...)给出的标签名称。
+
+		例如：
+		relabel_configs:
+		- action: labelmap
+		  regex: __meta_kubernetes_node_label_(.+)
+		原标签为： __meta_kubernetes_node_label_test=tttt
+		则目标标签为： test=tttt
+		 */
 	case LabelMap:
 		for _, l := range lset {
 			if cfg.Regex.MatchString(l.Name) {
@@ -235,12 +285,24 @@ func relabel(lset labels.Labels, cfg *Config) labels.Labels {
 				lb.Set(res, l.Value)
 			}
 		}
+		/**
+		labeldrop:
+			regex配置正则匹配标签名称，匹配上则删除该label
+		例如：
+		relabel_configs:
+		  - regex: label_should_drop_(.+)
+		    action: labeldrop
+		 */
 	case LabelDrop:
 		for _, l := range lset {
 			if cfg.Regex.MatchString(l.Name) {
 				lb.Del(l.Name)
 			}
 		}
+		/**
+		labelkeep:
+			regex配置正则匹配标签名称，匹配上则保留该label，没有匹配上的则删除
+		 */
 	case LabelKeep:
 		for _, l := range lset {
 			if !cfg.Regex.MatchString(l.Name) {

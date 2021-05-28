@@ -2241,9 +2241,12 @@ func (s sample) V() float64                        { return s.v }
 type memSeries struct {
 	sync.RWMutex
 
+	// ref 相当于这个series的uid :在getOrCreate函数中给出了明确的解释，使用递增的正整数作为ref，而没有使用hash因为hash random且不利于索引
 	ref           uint64
+	// lset 这个series 的label map
 	lset          labels.Labels
 	mmappedChunks []*mmappedChunk
+	// headChunk 即memChunk 在这个series在这段时间内的数据集合
 	headChunk     *memChunk
 	chunkRange    int64
 	firstChunkID  int
