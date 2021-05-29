@@ -245,16 +245,19 @@ func relabel(lset labels.Labels, cfg *Config) labels.Labels {
 		if indexes == nil {
 			break
 		}
+		// 解析target_label，如target_label: test011_$2
 		target := model.LabelName(cfg.Regex.ExpandString([]byte{}, cfg.TargetLabel, val, indexes))
 		if !target.IsValid() {
 			lb.Del(cfg.TargetLabel)
 			break
 		}
+		// 解析replacement配置，如：replacement: test_$1
 		res := cfg.Regex.ExpandString([]byte{}, cfg.Replacement, val, indexes)
 		if len(res) == 0 {
 			lb.Del(cfg.TargetLabel)
 			break
 		}
+		//target_label设置解析值
 		lb.Set(string(target), string(res))
 		// 将target_label设置为串联的source_labels的哈希的模数。
 	//relabel_configs:
