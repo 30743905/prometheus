@@ -148,7 +148,7 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 			case "remote-write-receiver"://2.25新增 可以将prometheus当成一个远程写，the remote write receiver endpoint is /api/v1/write
 				c.web.RemoteWriteReceiver = true
 				level.Info(logger).Log("msg", "Experimental remote-write-receiver enabled")
-			case "expand-external-labels": //2.27新增
+			case "expand-external-labels": //2.27新增，external_labels中支持环境变量
 				c.enableExpandExternalLabels = true
 				level.Info(logger).Log("msg", "Experimental expand-external-labels enabled")
 			case "exemplar-storage":
