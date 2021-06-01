@@ -173,7 +173,7 @@ func (f *fanoutAppender) AppendExemplar(ref uint64, l labels.Labels, e exemplar.
 }
 
 func (f *fanoutAppender) Commit() (err error) {
-	err = f.primary.Commit()
+	err = f.primary.Commit()//tsdb/db.go:816
 
 	for _, appender := range f.secondaries {
 		if err == nil {

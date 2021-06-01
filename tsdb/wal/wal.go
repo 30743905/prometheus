@@ -38,7 +38,11 @@ import (
 )
 
 const (
+	//WAL被分割成默认大小为128M的文件段（segment），之前版本默认大小是256M，文件段以数字命名，长度为8位的整形
 	DefaultSegmentSize = 128 * 1024 * 1024 // 128 MB
+	// WAL的写入单位是页（page），每页的大小为32KB，所以每个段大小必须是页的大小的整数倍。
+	//每个文件段都有一个“==已使用的页？==”属性来标识在该段中已经分配的页数目，如果WAL一次性写入的页数超过一个段的空闲页数，
+	//就会创建一个新的文件段来保存这些页，从而确保一次性写入的页不会跨段存储。
 	pageSize           = 32 * 1024         // 32KB
 	recordHeaderSize   = 7
 )
@@ -257,15 +261,18 @@ func New(logger log.Logger, reg prometheus.Registerer, dir string, compress bool
 // NewSize returns a new WAL over the given directory.
 // New segments are created with the specified size.
 func NewSize(logger log.Logger, reg prometheus.Registerer, dir string, segmentSize int, compress bool) (*WAL, error) {
+	// 首先判断段大小是否是page的整数倍
 	if segmentSize%pageSize != 0 {
 		return nil, errors.New("invalid segment size")
 	}
+	// 如果wal目录不存在的话则创建wal目录
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		return nil, errors.Wrap(err, "create dir")
 	}
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
+	// 创建WAL数据结构。因为WAL是与active segment关联的，所以WAL segmentSize即为指定的segmentSize。
 	w := &WAL{
 		dir:         dir,
 		logger:      logger,
@@ -276,7 +283,7 @@ func NewSize(logger log.Logger, reg prometheus.Registerer, dir string, segmentSi
 		compress:    compress,
 	}
 	w.metrics = newWALMetrics(reg)
-
+    // Segments()方法返回wal下开始文件段和结束文件段索引
 	_, last, err := Segments(w.Dir())
 	if err != nil {
 		return nil, errors.Wrap(err, "get segment range")
@@ -286,18 +293,19 @@ func NewSize(logger log.Logger, reg prometheus.Registerer, dir string, segmentSi
 	writeSegmentIndex := 0
 	// If some segments already exist create one with a higher index than the last segment.
 	if last != -1 {
+		// 结束文件段索引+1，生成新文件段索引
 		writeSegmentIndex = last + 1
 	}
-
+    // 创建新文件段
 	segment, err := CreateSegment(w.Dir(), writeSegmentIndex)
 	if err != nil {
 		return nil, err
 	}
-
+	// 将新创建的segment设置为WAL的active segment，同时根据segment文件大小设置WAL donePages，更新WAL currentSegment指标设置为新创建的segment的index。
 	if err := w.setSegment(segment); err != nil {
 		return nil, err
 	}
-
+	//启动新的goroutine执行actorc通道发送过来的func。主要用于执行比较耗时的操作，例如将segment中的数据fsync到disk中。
 	go w.run()
 
 	return w, nil
@@ -507,7 +515,9 @@ func (w *WAL) setSegment(segment *Segment) error {
 	if err != nil {
 		return err
 	}
+	// 计算文件段中已使用page数量
 	w.donePages = int(stat.Size() / pageSize)
+	// w.metrics存储tsdb wal对应的7个监控指标， currentSegment是wal当前文件段segment索引
 	w.metrics.currentSegment.Set(float64(segment.Index()))
 	return nil
 }
@@ -785,6 +795,7 @@ type segmentRef struct {
 }
 
 func listSegments(dir string) (refs []segmentRef, err error) {
+	// wal目录下文件列表
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -795,11 +806,14 @@ func listSegments(dir string) (refs []segmentRef, err error) {
 		if err != nil {
 			continue
 		}
+		// wal文件封装成segmentRef，append追加到切片中
 		refs = append(refs, segmentRef{name: fn, index: k})
 	}
+	// 切片排序
 	sort.Slice(refs, func(i, j int) bool {
 		return refs[i].index < refs[j].index
 	})
+	// 切片序号是否连续校验
 	for i := 0; i < len(refs)-1; i++ {
 		if refs[i].index+1 != refs[i+1].index {
 			return nil, errors.New("segments are not sequential")

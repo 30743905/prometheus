@@ -1430,7 +1430,7 @@ func (a *headAppender) log() error {
 		rec = enc.Series(a.series, buf)
 		buf = rec[:0]
 
-		if err := a.head.wal.Log(rec); err != nil {
+		if err := a.head.wal.Log(rec); err != nil {//tsdb/head.go:1418
 			return errors.Wrap(err, "log series")
 		}
 	}

@@ -1147,13 +1147,13 @@ sp.sync方法起了一个协程运行scrapePool的run方法去采集并存储监
  */
 func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	select {
-	//检测超时
-	case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
-		// Continue after a scraping offset.
-		//停止，退出
-	case <-sl.ctx.Done():
-		close(sl.stopped)
-		return
+		//检测超时
+		case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
+			// Continue after a scraping offset.
+			//停止，退出
+		case <-sl.ctx.Done():
+			close(sl.stopped)
+			return
 	}
 
 	var last time.Time
@@ -1248,7 +1248,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 			app.Rollback()
 			return
 		}
-		err = app.Commit()
+		err = app.Commit()//storage/fanout.go:175
 		if err != nil {
 			level.Error(sl.l).Log("msg", "Scrape commit failed", "err", err)
 		}
