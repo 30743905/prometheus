@@ -75,6 +75,7 @@ func Load(s string, expandExternalLabels bool, logger log.Logger) (*Config, erro
 		return nil, err
 	}
 
+	// 判断是否支持expandExternalLabels：external_labels中是否支持环境变量解析
 	if !expandExternalLabels {
 		return cfg, nil
 	}

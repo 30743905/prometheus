@@ -171,6 +171,7 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 }
 
 func main() {
+	// os.Getenv()获取环境变量
 	if os.Getenv("DEBUG") != "" {
 		runtime.SetBlockProfileRate(20)
 		runtime.SetMutexProfileFraction(20)
@@ -354,7 +355,7 @@ func main() {
 
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
 
-	// parse方法解析命令行参数
+	// parse方法解析命令行参数，并初始化到cfg对象中
 	_, err := a.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
@@ -387,6 +388,7 @@ func main() {
 
 	// Throw error for invalid config before starting other components.
 	// 加载prometheus yaml配置文件
+	// LoadFile()中第二个参数expandExternalLabels 判断是否支持expandExternalLabels：external_labels中是否支持环境变量解析
 	if _, err := config.LoadFile(cfg.configFile, false, log.NewNopLogger()); err != nil {
 		level.Error(logger).Log("msg", fmt.Sprintf("Error loading config (--config.file=%s)", cfg.configFile), "err", err)
 		os.Exit(2)
@@ -435,7 +437,7 @@ func main() {
 		}
 	}
 
-	{ // Max block size  settings.
+	{ // Max block size  settings.   壓縮區塊的最大持續時間(預設為 retention period 的 10% 時間)
 		if cfg.tsdb.MaxBlockDuration == 0 {
 			maxBlockDuration, err := model.ParseDuration("31d")
 			if err != nil {
@@ -691,6 +693,7 @@ func main() {
 	// sync.Once is used to make sure we can close the channel at different execution stages(SIGTERM or when the config is loaded).
 	type closeOnce struct {
 		C     chan struct{}
+		//sync.Once.Do(f func())能保证once只执行一次，无论你是否更换once.Do(xx)这里的方法,这个sync.Once块只会执行一次
 		once  sync.Once
 		Close func()
 	}
