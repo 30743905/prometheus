@@ -525,6 +525,7 @@ func (w *WAL) setSegment(segment *Segment) error {
 // flushPage writes the new contents of the page to disk. If no more records will fit into
 // the page, the remaining bytes will be set to zero and a new page will be started.
 // If clear is true, this is enforced regardless of how many bytes are left in the page.
+// 将page刷入到磁盘
 func (w *WAL) flushPage(clear bool) error {
 	w.metrics.pageFlushes.Inc()
 

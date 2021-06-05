@@ -814,6 +814,7 @@ func (a dbAppender) GetRef(lset labels.Labels) (uint64, labels.Labels) {
 }
 
 func (a dbAppender) Commit() error {
+
 	err := a.Appender.Commit()//tsdb/head.go:1469
 
 	// We could just run this check every few minutes practically. But for benchmarks
