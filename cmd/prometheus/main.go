@@ -737,16 +737,21 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->Termination handler begin")
 				// Don't forget to release the reloadReady channel so that waiting blocks can exit normally.
 				select {
 				case <-term:
+					level.Info(logger).Log("--->Termination handler term")
 					level.Warn(logger).Log("msg", "Received SIGTERM, exiting gracefully...")
 					reloadReady.Close()
 				case <-webHandler.Quit():
+					level.Info(logger).Log("--->Termination handler webHandler.Quit")
 					level.Warn(logger).Log("msg", "Received termination request via web service, exiting gracefully...")
 				case <-cancel:
+					level.Info(logger).Log("--->Termination handler cancel")
 					reloadReady.Close()
 				}
+				level.Info(logger).Log("--->Termination handler finish")
 				return nil
 			},
 			func(err error) {
@@ -758,7 +763,9 @@ func main() {
 		// Scrape discovery manager.
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->Scrape discovery begin")
 				err := discoveryManagerScrape.Run()
+				level.Info(logger).Log("--->Scrape discovery discoveryManagerScrape.Run")
 				level.Info(logger).Log("msg", "Scrape discovery manager stopped")
 				return err
 			},
@@ -772,7 +779,9 @@ func main() {
 		// Notify discovery manager.
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->Notify discovery begin")
 				err := discoveryManagerNotify.Run()
+				level.Info(logger).Log("--->Notify discovery discoveryManagerNotify.Run")
 				level.Info(logger).Log("msg", "Notify discovery manager stopped")
 				return err
 			},
@@ -792,7 +801,9 @@ func main() {
 				// It depends on the config being in sync with the discovery manager so
 				// we wait until the config is fully loaded.
 				// 当所有配置都准备好
+				level.Info(logger).Log("--->ScrapeManager begin")
 				<-reloadReady.C
+				level.Info(logger).Log("--->ScrapeManager reloadReady")
 				// 启动scrapeManager
 				//ScrapeManager组件的启动函数
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
@@ -818,15 +829,18 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->reload begin")
 				<-reloadReady.C
-
+				level.Info(logger).Log("--->reload reloadReady.C")
 				for {
 					select {
 					case <-hup:
+						level.Info(logger).Log("--->reload hup")
 						if err := reloadConfig(cfg.configFile, cfg.enableExpandExternalLabels, logger, noStepSubqueryInterval, reloaders...); err != nil {
 							level.Error(logger).Log("msg", "Error reloading config", "err", err)
 						}
 					case rc := <-webHandler.Reload():
+						level.Info(logger).Log("--->reload rc")
 						if err := reloadConfig(cfg.configFile, cfg.enableExpandExternalLabels, logger, noStepSubqueryInterval, reloaders...); err != nil {
 							level.Error(logger).Log("msg", "Error reloading config", "err", err)
 							rc <- err
@@ -834,10 +848,10 @@ func main() {
 							rc <- nil
 						}
 					case <-cancel:
+						level.Info(logger).Log("--->reload cancel")
 						return nil
 					}
 				}
-
 			},
 			func(err error) {
 				// Wait for any in-progress reloads to complete to avoid
@@ -851,6 +865,7 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->configuration begin")
 				select {
 				case <-dbOpen:
 				// In case a shutdown is initiated before the dbOpen is released
@@ -859,12 +874,19 @@ func main() {
 					return nil
 				}
 
+				level.Info(logger).Log("--->configuration begin reloadConfig")
+				/**
+				加载解析prometheus.yml配置文件，并调用各个组件ApplyConfig()方法将配置传入
+				 */
 				if err := reloadConfig(cfg.configFile, cfg.enableExpandExternalLabels, logger, noStepSubqueryInterval, reloaders...); err != nil {
 					return errors.Wrapf(err, "error loading config from %q", cfg.configFile)
 				}
-
+				level.Info(logger).Log("--->configuration finish reloadConfig")
+				/**
+				配置加载完毕，执行reloadReady.Close()关闭reloadReady.C通道，这样  <-reloadReady.C 阻塞地方可以继续向下执行
+				 */
 				reloadReady.Close()
-
+				level.Info(logger).Log("--->configuration begin webHandler.Ready")
 				webHandler.Ready()
 				level.Info(logger).Log("msg", "Server is ready to receive web requests.")
 				<-cancel
@@ -879,8 +901,11 @@ func main() {
 		// Rule manager.
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->rule manager begin")
 				<-reloadReady.C
+				level.Info(logger).Log("--->rule reloadReady")
 				ruleManager.Run()
+				level.Info(logger).Log("--->rule ruleManager.Run")
 				return nil
 			},
 			func(err error) {
@@ -894,6 +919,7 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->tsdb begin")
 				level.Info(logger).Log("msg", "Starting TSDB ...")
 				if cfg.tsdb.WALSegmentSize != 0 {
 					if cfg.tsdb.WALSegmentSize < 10*1024*1024 || cfg.tsdb.WALSegmentSize > 256*1024*1024 {
@@ -911,6 +937,7 @@ func main() {
 					prometheus.DefaultRegisterer,
 					&opts,
 				)
+				level.Info(logger).Log("--->tsdb openDBWithMetrics")
 				if err != nil {
 					return errors.Wrapf(err, "opening storage failed")
 				}
@@ -936,6 +963,7 @@ func main() {
 
 				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
 				localStorage.Set(db, startTimeMargin)
+				level.Info(logger).Log("--->tsdb localStorage.Set")
 				close(dbOpen)
 				<-cancel
 				return nil
@@ -952,9 +980,12 @@ func main() {
 		// Web handler.
 		g.Add(
 			func() error {
+				level.Info(logger).Log("--->webHandler begin")
 				if err := webHandler.Run(ctxWeb, listener, *webConfig); err != nil {
+					level.Info(logger).Log("--->webHandler error")
 					return errors.Wrapf(err, "error starting web server")
 				}
+				level.Info(logger).Log("--->webHandler finish")
 				return nil
 			},
 			func(err error) {
@@ -973,8 +1004,9 @@ func main() {
 				// it needs to read a valid config for each job.
 				// It depends on the config being in sync with the discovery manager
 				// so we wait until the config is fully loaded.
+				level.Info(logger).Log("--->notifierManager begin")
 				<-reloadReady.C
-
+				level.Info(logger).Log("--->notifierManager finish reloadReady.C")
 				notifierManager.Run(discoveryManagerNotify.SyncCh())
 				level.Info(logger).Log("msg", "Notifier manager stopped")
 				return nil
