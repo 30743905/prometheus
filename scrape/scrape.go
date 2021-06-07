@@ -448,6 +448,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 /**
 sp.Sync方法引入了Target结构体，把[]*targetgroup.Group类型的groups转换为targets类型，其中每个groups对应一个job_name下多个targets．随后，调用sp.sync方法，同步scrape服务
  */
+// targetgroup.Group代表scrape_configs下一个job_name配置项
 func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	sp.mtx.Lock()
 	defer sp.mtx.Unlock()
@@ -458,23 +459,19 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	sp.droppedTargets = []*Target{}
 	// 遍历所有Group
 	for _, tg := range tgs {
-		// 转化对应 targets
-		//转换targetgroup.Group类型为Target
+		// targetgroup.Group下targets就是job_name下所有target配置
 		targets, err := targetsFromGroup(tg, sp.config)
 		if err != nil {
 			level.Error(sp.logger).Log("msg", "creating targets failed", "err", err)
 			continue
 		}
-		// 将所有有效targets添加到all，等待处理
-		// 这里有个疑问，tg对应一个target，为什么返回回来的targets不是对应一个target相关参数，需要用for循环？
+		// 遍历targets，将所有有效targets添加到all，等待处理
 		for _, t := range targets {
-			// 检查该target的lable是否有效
 			// 判断Target的有效label是否大于0
 			if t.Labels().Len() > 0 {
 				// 添加到all队列中
 				all = append(all, t)
 			} else if t.DiscoveredLabels().Len() > 0 {
-				// 记录无效target
 				// 若为无效Target，则加入scrapeLoop的droppedTargets中
 				sp.droppedTargets = append(sp.droppedTargets, t)
 			}
@@ -1447,6 +1444,7 @@ loop:
 			sampleAdded bool
 			e           exemplar.Exemplar
 		)
+		// 遍历指标并进行处理
 		if et, err = p.Next(); err != nil {
 			if err == io.EOF {
 				err = nil
@@ -1465,11 +1463,12 @@ loop:
 			continue
 		case textparse.EntryComment:
 			continue
-		default:
+		default://非上述类型
 		}
 		total++
 
 		t := defTime
+		// met：时序； v：指标值
 		met, tp, v := p.Series()
 		if !sl.honorTimestamps {
 			tp = nil
@@ -1493,11 +1492,13 @@ loop:
 			ref = ce.ref
 			lset = ce.lset
 		} else {
+			// 解析指标上label,赋值给lset
 			mets = p.Metric(&lset)
 			hash = lset.Hash()
 
 			// Hash label set as it is seen local to the target. Then add target labels
 			// and relabeling and store the final label set.
+			// 将target label添加到lset中，并执行metric_relabel_configs
 			lset = sl.sampleMutator(lset)
 
 			// The label set may be set to nil to indicate dropping.
@@ -1512,12 +1513,14 @@ loop:
 			}
 
 			// If any label limits is exceeded the scrape should fail.
+			// label校验：labelLimit、labelNameLengthLimit、labelValueLengthLimit
 			if err = verifyLabelLimits(lset, sl.labelLimits); err != nil {
 				targetScrapePoolExceededLabelLimits.Inc()
 				break loop
 			}
 		}
 
+		// 指标存储
 		ref, err = app.Append(ref, lset, t, v)
 		sampleAdded, err = sl.checkAddError(ce, met, tp, err, &sampleLimitErr, &appErrs)
 		if err != nil {
