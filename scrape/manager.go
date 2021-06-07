@@ -146,13 +146,15 @@ type Manager struct {
 指标采集(scrapeManager)在main.go启动时，会起一个协程运行Run方法，从服务发现(serviceDiscover)实时获取被监控服务(targets)
  */
 func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
-	//定时(5s)更新服务(targets)，结合triggerReload一起使用，即每5s判断一次triggerReload是否更新．
+
 	/**
 	若服务发现(serviceDiscovery)有服务(target)变动，Run方法就会向管道triggerReload注入值：m.triggerReload <- struct{}{}中，
 	并起了一个协程，运行reloader方法．用于定时更新服务(targets)．启动这个协程应该是为了防止阻塞从服务发现(serviceDiscover)获取变动的服务(targets)
 
 	reloader方法启动了一个定时器，在无限循环中每5s判断一下管道triggerReload，若有值，则执行reload方法．
 	 */
+
+	// 定时(5s)更新服务(targets)，结合triggerReload一起使用，即每5s判断一次triggerReload是否更新．
 	go m.reloader()
 	for {
 		select {
