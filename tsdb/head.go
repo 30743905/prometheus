@@ -1335,11 +1335,13 @@ func (a *headAppender) Append(ref uint64, lset labels.Labels, t int64, v float64
 
 		var created bool
 		var err error
+		// 如果lset对应的series没有，则建一个。同时把新建的series放入倒排Posting映射里面
 		s, created, err = a.head.getOrCreate(lset.Hash(), lset)
 		if err != nil {
 			return 0, err
 		}
 		if created {
+			// 如果新创建了一个，则将新建的也放到a.series里面
 			a.series = append(a.series, record.RefSeries{
 				Ref:    s.ref,
 				Labels: lset,
@@ -1355,6 +1357,7 @@ func (a *headAppender) Append(ref uint64, lset labels.Labels, t int64, v float64
 		}
 		return 0, err
 	}
+	// 设置为等待提交状态
 	s.pendingCommit = true
 	s.Unlock()
 
@@ -1364,7 +1367,9 @@ func (a *headAppender) Append(ref uint64, lset labels.Labels, t int64, v float64
 	if t > a.maxt {
 		a.maxt = t
 	}
-
+	// 为了事务概念，放入temp存储，等待真正commit时候再写入memSeries
+	// Prometheus在add数据点的时候并没有直接add到memSeries(也就是query所用到的结构体里),而是加入到一个临时的samples切片里面。
+	// 同时还将这个数据点对应的memSeries同步增加到另一个sampleSeries里面。
 	a.samples = append(a.samples, record.RefSample{
 		Ref: s.ref,
 		T:   t,
@@ -1994,6 +1999,7 @@ func (h *Head) getOrCreate(hash uint64, lset labels.Labels) (*memSeries, bool, e
 }
 
 func (h *Head) getOrCreateWithID(id, hash uint64, lset labels.Labels) (*memSeries, bool, error) {
+	// 如果lset对应的series没有，则建一个。同时把新建的series放入倒排Posting映射里面
 	s, created, err := h.series.getOrSet(hash, lset, func() *memSeries {
 		return newMemSeries(lset, id, h.chunkRange.Load(), &h.memChunkPool)
 	})
@@ -2068,11 +2074,15 @@ const (
 // The locks are padded to not be on the same cache line. Filling the padded space
 // with the maps was profiled to be slower – likely due to the additional pointer
 // dereferences.
+// 为了让Prometheus在内存和磁盘中保存更大的数据量，势必需要进行压缩。而memChunk在内存中保存的正是采用XOR算法压缩过的数据
 type stripeSeries struct {
 	size                    int
-	series                  []map[uint64]*memSeries
-	hashes                  []seriesHashmap
-	locks                   []stripeLock
+	series                  []map[uint64]*memSeries // 记录refId到memSeries的映射
+	// 而hash值是依据labelSets的值而算出来
+	hashes                  []seriesHashmap // 记录hash值到memSeries,hash冲突采用拉链法
+	// 由于在Prometheus中会频繁的对map[hash/refId]memSeries进行操作，例如检查这个labelSet对应的memSeries是否存在，
+	// 不存在则创建等。由于golang的map非线程安全，所以其采用了分段锁去拆分锁。
+	locks                   []stripeLock // 分段锁
 	seriesLifecycleCallback SeriesLifecycleCallback
 }
 

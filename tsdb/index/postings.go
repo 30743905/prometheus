@@ -299,10 +299,11 @@ func (p *MemPostings) Iter(f func(labels.Label, Postings) error) error {
 func (p *MemPostings) Add(id uint64, lset labels.Labels) {
 	p.mtx.Lock()
 
+	// 将新创建的memSeries refId都加到对应的Label倒排里去
 	for _, l := range lset {
 		p.addFor(id, l)
 	}
-	p.addFor(id, allPostingsKey)
+	p.addFor(id, allPostingsKey) // allPostingKey "","" every one都加进去
 
 	p.mtx.Unlock()
 }
