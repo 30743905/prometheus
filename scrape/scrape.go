@@ -1143,6 +1143,7 @@ func newScrapeLoop(ctx context.Context,
 sp.sync方法起了一个协程运行scrapePool的run方法去采集并存储监控指标(metrics)，run方法实现如下：
  */
 func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
+	fmt.Println("----------->run::", time.Now())
 	select {
 		//检测超时
 		case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
@@ -1163,13 +1164,17 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 
 mainLoop:
 	for {
+		fmt.Println("----------->run::11>", time.Now())
 		select {
 		case <-sl.parentCtx.Done():
+			fmt.Println("--->sl.parentCtx.Done")
 			close(sl.stopped)
 			return
 		case <-sl.ctx.Done():
+			fmt.Println("--->sl.ctx.Done")
 			break mainLoop
 		default:
+			fmt.Println("--->default")
 		}
 
 		// Temporary workaround for a jitter in go timers that causes disk space
@@ -1224,6 +1229,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 	// 记录第一次
 	// Only record after the first scrape.
 	if !last.IsZero() {
+		// 非第一次执行内容
 		targetIntervalLength.WithLabelValues(interval.String()).Observe(
 			time.Since(last).Seconds(),
 		)
@@ -1470,6 +1476,9 @@ loop:
 		t := defTime
 		// met：时序； v：指标值
 		met, tp, v := p.Series()
+		// 是否使用抓取到 target 上产生的时间。
+		// true: 如果 target 中有时间，使用 target 上的时间；
+		// false: 直接忽略 target 上的时间；
 		if !sl.honorTimestamps {
 			tp = nil
 		}
