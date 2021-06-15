@@ -1164,17 +1164,13 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 
 mainLoop:
 	for {
-		fmt.Println("----------->run::11>", time.Now())
 		select {
 		case <-sl.parentCtx.Done():
-			fmt.Println("--->sl.parentCtx.Done")
 			close(sl.stopped)
 			return
 		case <-sl.ctx.Done():
-			fmt.Println("--->sl.ctx.Done")
 			break mainLoop
 		default:
-			fmt.Println("--->default")
 		}
 
 		// Temporary workaround for a jitter in go timers that causes disk space

@@ -2075,6 +2075,14 @@ const (
 // with the maps was profiled to be slower – likely due to the additional pointer
 // dereferences.
 // 为了让Prometheus在内存和磁盘中保存更大的数据量，势必需要进行压缩。而memChunk在内存中保存的正是采用XOR算法压缩过的数据
+
+/**
+	但是ref仅仅是供Prometheus内部使用的，如果用户要查询某个具体的时间序列，通常会利用一堆的label用以唯一指定一个时间序列。那么如何通过一堆label最快地找到对应的series呢？
+	哈希表显然是最佳的方案。基于label计算一个哈希值，维护一张哈希值与memSeries的映射表，如果产生哈希碰撞的话，则直接用label进行匹配。
+	因此，Prometheus有必要在内存中维护如下所示的两张哈希表，从而无论利用ref还是label都能很快找到对应的memSeries：
+		series map[uint64]*memSeries // ref到memSeries的映射
+		hashes map[uint64][]*memSeries // labels的哈希值到memSeries的映射
+ */
 type stripeSeries struct {
 	size                    int
 	series                  []map[uint64]*memSeries // 记录refId到memSeries的映射
@@ -2208,6 +2216,16 @@ func (s *stripeSeries) getOrSet(hash uint64, lset labels.Labels, createSeries fu
 		series = createSeries()
 	}
 
+	/**
+	Prometheus将一整个大的哈希表进行了切片，切割成了16k个小的哈希表。如果想要利用ref找到对应的series，首先要将ref对16K取模，假设得到的值为x，找到对应的小哈希表series[x]。
+	至于对小哈希表的操作，只需要锁住模对应的locks[x]，从而大大减小了读写memSeries时对锁的抢占造成的损耗，提高了并发性能。对于基于label哈希值的读写，操作类似。
+
+	然而上述数据结构仅仅只能支持对于时间序列的精确查询，必须严格指定每一个label的值从而能够唯一地确定一条时间序列。但很多时候，模糊查询才是更为常用的。例如，我们想知道访问路径为/的各类HTTP请求的数目（请求的方法可以为GET，POST等等），此时提交给Prometheus的查询条件如下：
+
+	s.size = 16384 = 2^128 = 16k
+
+		当b为2^n时：a%b=a&(b-1)
+	 */
 	i := hash & uint64(s.size-1)
 	s.locks[i].Lock()
 
@@ -2248,6 +2266,25 @@ func (s sample) V() float64                        { return s.v }
 
 // memSeries is the in-memory representation of a series. None of its methods
 // are goroutine safe and it is the caller's responsibility to lock it.
+/**
+	一个memSeries主要由三部分组成：
+		lset：用以识别这个series的label集合
+		ref：每接收到一个新的时间序列（即它的label集合与已有的时间序列都不同）Prometheus就会用一个唯一的整数标识它，如果有ref，我们就能轻易找到相应的series
+		memChunks：每一个memChunk是一个时间段内该时间序列所有sample的集合。如果我们想要读取[tx, ty]（t1 < tx < t2, t2 < ty < t3 ）时间范围内该时间序列的数据，
+			只需要对[t1, t3]范围内的两个memChunk的sample数据进行裁剪即可，从而提高了查询的效率。每当采集到新的sample，Prometheus就会用Gorilla中类似的算法将它压缩至最新的memChunk中
+
+但是ref仅仅是供Prometheus内部使用的，如果用户要查询某个具体的时间序列，通常会利用一堆的label用以唯一指定一个时间序列。那么如何通过一堆label最快地找到对应的series呢？
+哈希表显然是最佳的方案。基于label计算一个哈希值，维护一张哈希值与memSeries的映射表，如果产生哈希碰撞的话，则直接用label进行匹配。因此，Prometheus有必要在内存中维护如下所示的两张哈希表，
+从而无论利用ref还是label都能很快找到对应的memSeries：
+{
+	series map[uint64]*memSeries // ref到memSeries的映射
+	hashes map[uint64][]*memSeries // labels的哈希值到memSeries的映射
+}
+然而我们知道Golang中的map并不是并发安全的，而Prometheus中又有大量对于memSeries的增删操作，如果在读写上述结构时简单地用一把大锁锁住，显然无法满足性能要求。所以Prometheus用了如下数据结构将锁的控制精细化:
+const stripSize = 1 << 14
+
+// 为表达直观，已将Prometheus原生数据结构简化
+ */
 type memSeries struct {
 	sync.RWMutex
 

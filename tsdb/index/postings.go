@@ -35,6 +35,38 @@ func AllPostingsKey() (name, value string) {
 // to out of order.
 // ensureOrder() must be called once before any reads are done. This allows for quick
 // unordered batch fills on startup.
+/**
+针对如此复杂的查询需求，暴力地遍历所有series进行匹配是行不通的。一个指标往往会包含诸多的label，每个label又可以有很多的取值。因此Prometheus中会存在大量的series，为了能快速匹配到符合要求的series，Prometheus引入了倒排索引，结构如下：
+
+struct MemPostings struct {
+	mtx	sync.Mutex
+	m	map[string]map[string][]uint64
+	ordered	bool
+}
+当Prometheus抓取到一个新的series，假设它的ref为x，包含如下的label pair：
+
+{__name__="http_request_total", path="/", method="GET"}
+在初始化相应的memSeries并且更新了哈希表之后，还需要对倒排索引进行刷新：
+
+MemPostings.m["__name__"]["http_request_total"]{..., x ,...}
+MemPostings.m["path"]["/"]{..., x ,...}
+MemPostings.m["method"]["GET"]{..., x, ...}
+可以看到，倒排索引能够将所有包含某个label pair的series都聚合在一起。如果要得到匹配多个label pair的series，只要将每个label pair包含的series做交集即可。对于查询请求
+
+http_request_total{path="/"}
+的匹配过程如下：
+
+MemPostings.["__name__"]["http_request_total"]{3, 4, 2, 1}
+MemPostings.["path"]["/"]{5, 4, 1, 3}
+{3, 4, 2, 1} x {5, 4, 1, 3} -> {1, 3, 4}
+但是如果每个label pair包含的series足够多，那么对多个label pair的series做交集也将是非常耗时的操作。那么能不能进一步优化呢？事实上，只要保持每个label pair里包含的series有序就可以了，这样就能将复杂度从指数级瞬间下降到线性级。
+
+MemPostings.["__name__"]["http_request_total"]{1, 2, 3, 4}
+MemPostings.["path"]["/"]{1, 3, 4, 5}
+{1, 2, 3, 4} x {1, 3, 4, 5} -> {1, 3, 4}
+Prometheus内存中的存储结构大致如上，Gorilla的压缩算法提高了samples的存储效率，而哈希表以及倒排索引的使用，则对Prometheus复杂的时序数据查询提供了高效的支持。
+
+ */
 type MemPostings struct {
 	mtx     sync.RWMutex
 	m       map[string]map[string][]uint64
