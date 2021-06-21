@@ -178,13 +178,17 @@ func main() {
 	}
 
 	var (
+		//tsdb保留数据时间，已废弃
 		oldFlagRetentionDuration model.Duration
+		//tsdb保留数据时间，默认15天
 		newFlagRetentionDuration model.Duration
 	)
+
 
 	// 创建实体
 	cfg := flagConfig{
 		notifier: notifier.Options{
+			// 默认注册器注册 cpu 和 go 指标收集器
 			Registerer: prometheus.DefaultRegisterer,
 		},
 		web: web.Options{
@@ -200,13 +204,18 @@ func main() {
 
 	a.HelpFlag.Short('h')
 
-	// 配置文件
+
+	/**
+	a.Flag()：创建FlagClause并放入到flagGroup中，可以通过a.GetFlag(name)获取到
+		Default()用于设置FlagClause默认值， StringVar(&cfg.configFile)则如果cfg配置覆盖默认值
+	 */
 	a.Flag("config.file", "Prometheus configuration file path.").
 		Default("prometheus.yml").StringVar(&cfg.configFile)
 
 	// 监听端口
 	a.Flag("web.listen-address", "Address to listen on for UI, API, and telemetry.").
 		Default("0.0.0.0:9090").StringVar(&cfg.web.ListenAddress)
+
 
 	webConfig := toolkit_webflag.AddFlags(a)
 
@@ -258,6 +267,7 @@ func main() {
 	a.Flag("web.page-title", "Document title of Prometheus instance.").
 		Default("Prometheus Time Series Collection and Processing Server").StringVar(&cfg.web.PageTitle)
 
+	// 限制访问源
 	a.Flag("web.cors.origin", `Regex for CORS origin. It is fully anchored. Example: 'https?://(domain1|domain2)\.com'`).
 		Default(".*").StringVar(&cfg.corsRegexString)
 
@@ -265,6 +275,7 @@ func main() {
 	a.Flag("storage.tsdb.path", "Base path for metrics storage.").
 		Default("data/").StringVar(&cfg.localStoragePath)
 
+	// 每两小时将 wal 落盘
 	a.Flag("storage.tsdb.min-block-duration", "Minimum duration of a data block before being persisted. For use in testing.").
 		Hidden().Default("2h").SetValue(&cfg.tsdb.MinBlockDuration)
 
@@ -296,6 +307,7 @@ func main() {
 	a.Flag("storage.tsdb.allow-overlapping-blocks", "[EXPERIMENTAL] Allow overlapping blocks, which in turn enables vertical compaction and vertical query merge.").
 		Default("false").BoolVar(&cfg.tsdb.AllowOverlappingBlocks)
 
+	// 压缩 wal，默认压缩
 	a.Flag("storage.tsdb.wal-compression", "Compress the tsdb WAL.").
 		Default("true").BoolVar(&cfg.tsdb.WALCompression)
 
@@ -339,23 +351,28 @@ func main() {
 		Default("5m").SetValue(&cfg.lookbackDelta)
 
 	//#最大查询时间。
+	// 查询表达式超时时长，默认2分钟
 	a.Flag("query.timeout", "Maximum time a query may take before being aborted.").
 		Default("2m").SetValue(&cfg.queryTimeout)
 
 	//#最大查询并发数
+	// 并发查询的数量，感觉 cpu 和内存资源比较充裕的话可以适当放大
 	a.Flag("query.max-concurrency", "Maximum number of queries executed concurrently.").
 		Default("20").IntVar(&cfg.queryConcurrency)
 
 	//#单个查询可以加载到内存中的最大样本数。 请注意，如果查询尝试将更多的样本加载到内存中，则查询将失败，因此这也限制了查询可以返回的样本数。
+	// 一次查询最多加载到内存的样本数，也是最多返回的样本数
 	a.Flag("query.max-samples", "Maximum number of samples a single query can load into memory. Note that queries will fail if they try to load more samples than this into memory, so this also limits the number of samples a query can return.").
 		Default("50000000").IntVar(&cfg.queryMaxSamples)
 
 	a.Flag("enable-feature", "Comma separated feature names to enable. Valid options: promql-at-modifier, promql-negative-offset, remote-write-receiver, exemplar-storage, expand-external-labels. See https://prometheus.io/docs/prometheus/latest/disabled_features/ for more details.").
 		Default("").StringsVar(&cfg.featureList)
 
+	// 添加日志设置的标志位参数，有日志级别（[debug, info, warn, error]"）和日志格式（[logfmt, json]）
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
 
 	// parse方法解析命令行参数，并初始化到cfg对象中
+	// 解析、校验参数
 	_, err := a.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
@@ -363,6 +380,7 @@ func main() {
 		os.Exit(2)
 	}
 
+	// 根据配置文件初始化 logger
 	logger := promlog.New(&cfg.promlogConfig)
 
 	if err := cfg.setFeatureListOptions(logger); err != nil {
@@ -387,8 +405,12 @@ func main() {
 	}
 
 	// Throw error for invalid config before starting other components.
-	// 加载prometheus yaml配置文件
-	// LoadFile()中第二个参数expandExternalLabels 判断是否支持expandExternalLabels：external_labels中是否支持环境变量解析
+	/**
+		校验命令行参数配置的 prometheus 配置文件是否有效，如果 配置文件（yml）为空就使用默认配置
+		校验后并没有声明 config 对象并把解析结果赋值给它，这里仅仅是解析。
+
+		LoadFile()中第二个参数expandExternalLabels 判断是否支持expandExternalLabels：external_labels中是否支持环境变量解析
+	 */
 	if _, err := config.LoadFile(cfg.configFile, false, log.NewNopLogger()); err != nil {
 		level.Error(logger).Log("msg", fmt.Sprintf("Error loading config (--config.file=%s)", cfg.configFile), "err", err)
 		os.Exit(2)
@@ -399,6 +421,9 @@ func main() {
 	// but if we don't do it now, the metrics will stay at zero until the
 	// startup procedure is complete, which might take long enough to
 	// trigger alerts about an invalid config.
+	// 配置文件的有效性已经确立，即便尚未加载配置，将自身的 metrics 里的 prometheus_config_last_reload_successful 设置为1。
+	// 后面会加载配置并再次设置这个 metric，但是如果现在不做这一步，这个 metric 会一直为 0 直到启动过程完成，
+	// prometheus_config_last_reload_successful 为 0 的时间也就是启动的时间足够长就可能触发配置无效的告警。
 	configSuccess.Set(1)
 	configSuccessTime.SetToCurrentTime()
 
@@ -427,6 +452,7 @@ func main() {
 		}
 
 		// Check for overflows. This limits our max retention to 100y.
+		// 如果设置的时序数据保留时长溢出整数，就限制为 100 年。最大可设置的值为292y。
 		if cfg.tsdb.RetentionDuration < 0 {
 			y, err := model.ParseDuration("100y")
 			if err != nil {
@@ -452,6 +478,7 @@ func main() {
 		}
 	}
 
+	// 设置默认的指标估值时间间隔
 	noStepSubqueryInterval := &safePromQLNoStepSubqueryInterval{}
 	noStepSubqueryInterval.Set(config.DefaultGlobalConfig.EvaluationInterval)
 
@@ -461,19 +488,21 @@ func main() {
 	klogv2.ClampLevel(6)
 	klogv2.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
 
+	// 打印启动日志
 	level.Info(logger).Log("msg", "Starting Prometheus", "version", version.Info())
+	// 32位系统兼容性提示信息
 	if bits.UintSize < 64 {
 		level.Warn(logger).Log("msg", "This Prometheus binary has not been compiled for a 64-bit architecture. Due to virtual memory constraints of 32-bit systems, it is highly recommended to switch to a 64-bit binary of Prometheus.", "GOARCH", runtime.GOARCH)
 	}
 
+	// 打印系统信息日志
 	level.Info(logger).Log("build_context", version.BuildContext())
 	level.Info(logger).Log("host_details", prom_runtime.Uname())
 	level.Info(logger).Log("fd_limits", prom_runtime.FdLimits())
 	level.Info(logger).Log("vm_limits", prom_runtime.VMLimits())
 
 	/**
-	Storage组件初始化
-
+	Storage组件初始化：声明scraper相关和存储相关结构体变量
 	Prometheus的Storage组件是时序数据库，包含两个：localStorage和remoteStorage．localStorage当前版本指TSDB，
 	用于对metrics的本地存储存储，remoteStorage用于metrics的远程存储，其中fanoutStorage作为localStorage和remoteStorage的读写代理服务器
 	 */
@@ -499,6 +528,9 @@ func main() {
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
 
 		/**
+
+		一共有两个 discovery.Manager 一个discoveryManagerScrape，服务scrape，一个是discoveryManagerNotify， 服务notify
+
 		discoveryManagerScrape组件用于服务发现，当前版本支持多种服务发现系统，比如kuberneters等，
 		通过方法discovery.NewManager完成初始化，
 		 */
@@ -517,11 +549,14 @@ func main() {
 		并将抓取的metrics存储到fanoutStorage中，通过方法scrape.NewManager完成初始化
 
 		fanoutStorage是监控的存储的抽象
+
+		// 声明 scrapeManager，fanout Storage 是一个读写多个底层存储的代理
 		*/
 		scrapeManager = scrape.NewManager(log.With(logger, "component", "scrape manager"), fanoutStorage)
 
 		/**
 		queryEngine组件用于rules查询和计算，通过方法promql.NewEngine完成初始化
+		// 声明 promql 的引擎配置
 		 */
 		opts = promql.EngineOpts{
 			Logger:                   log.With(logger, "component", "query engine"),
@@ -534,9 +569,11 @@ func main() {
 			EnableAtModifier:         cfg.enablePromQLAtModifier,
 			EnableNegativeOffset:     cfg.enablePromQLNegativeOffset,
 		}
+		// 声明 promql 的 queryEngine
 		queryEngine = promql.NewEngine(opts)
 
 		/**
+		// 声明 ruleManager
 		ruleManager组件通过方法rules.NewManager完成初始化．其中rules.NewManager的参数涉及多个组件：存储，queryEngine和notifier，
 		整个流程包含rule计算和发送告警
 		 */
@@ -558,6 +595,7 @@ func main() {
 	scraper.Set(scrapeManager)
 
 	/**
+	从命令行解析的配置项都赋值给 cfg.web 的配置项
 	Web组件用于为Storage组件，queryEngine组件，scrapeManager组件， ruleManager组件和notifier 组件提供外部HTTP访问方式，初始化代码如下:
 	 */
 	cfg.web.Context = ctxWeb
@@ -582,6 +620,7 @@ func main() {
 		GoVersion: version.GoVersion,
 	}
 
+	// 把 Prometheus 启动的配置参数都记录在这个 map 里
 	cfg.web.Flags = map[string]string{}
 
 	// Exclude kingpin default flags to expose only Prometheus ones.
@@ -633,6 +672,7 @@ func main() {
 		}, {
 			// The Scrape and notifier managers need to reload before the Discovery manager as
 			// they need to read the most updated config when receiving the new targets list.
+			// scrape 和 notifier manager 要在 discovery manager 之前重新加载，因为它们要在获取新的监控目标之前最新配置
 			name:     "scrape",
 			// scrapeManger配置
 			reloader: scrapeManager.ApplyConfig,
@@ -682,15 +722,18 @@ func main() {
 			},
 		},
 	}
-
+	// 注册自身的 metric
 	prometheus.MustRegister(configSuccess)
 	prometheus.MustRegister(configSuccessTime)
 
 	// Start all components while we wait for TSDB to open but only load
 	// initial config and mark ourselves as ready after it completed.
+	// 在等待开启 TSDB 的时候启动所有的组件，进加载初始配置，全部启动完成后标记为 ready。
+	// 这个 channel 初始化 DB 完成的信号
 	dbOpen := make(chan struct{})
 
 	// sync.Once is used to make sure we can close the channel at different execution stages(SIGTERM or when the config is loaded).
+	// sync.Once 用于确保在不同的执行阶段（SIGTERM 或加载完配置）关闭 channel。
 	type closeOnce struct {
 		C     chan struct{}
 		//sync.Once.Do(f func())能保证once只执行一次，无论你是否更换once.Do(xx)这里的方法,这个sync.Once块只会执行一次
@@ -698,6 +741,7 @@ func main() {
 		Close func()
 	}
 	// Wait until the server is ready to handle reloading.
+	// 等待直到 server 准备好处理配置重加载。
 	reloadReady := &closeOnce{
 		C: make(chan struct{}),
 	}
@@ -706,7 +750,7 @@ func main() {
 			close(reloadReady.C)
 		})
 	}
-
+	// 启动 jaeger 链路追踪
 	closer, err := initTracing(logger)
 	if err != nil {
 		level.Error(logger).Log("msg", "Unable to init tracing", "err", err)
@@ -714,12 +758,14 @@ func main() {
 	}
 	defer closer.Close()
 
+	// 启动 web 服务
 	listener, err := webHandler.Listener()
 	if err != nil {
 		level.Error(logger).Log("msg", "Unable to start web listener", "err", err)
 		os.Exit(1)
 	}
 
+	// 验证额外的 web 配置，比如 tsl
 	err = toolkit_web.Validate(*webConfig)
 	if err != nil {
 		level.Error(logger).Log("msg", "Unable to validate web configuration file", "err", err)
@@ -727,6 +773,7 @@ func main() {
 	}
 
 	/**
+	oklog.run.Group 和 google errgroup 功能相近，维护一组并发任务的执行。
 	对象g中包含各个服务组件的入口，通过调用Add方法把把这些入口添加到对象g中
 	 */
 	var g run.Group
@@ -735,6 +782,7 @@ func main() {
 		term := make(chan os.Signal, 1)
 		signal.Notify(term, os.Interrupt, syscall.SIGTERM)
 		cancel := make(chan struct{})
+		// 接收信号退出
 		g.Add(
 			func() error {
 				level.Info(logger).Log("--->Termination handler begin")
@@ -802,6 +850,8 @@ func main() {
 				// we wait until the config is fully loaded.
 				// 当所有配置都准备好
 				level.Info(logger).Log("--->ScrapeManager begin")
+				// scrape manager 获取到新的抓取目标列表时，它需要读取每个 job 的合法的配置。
+				// 这依赖于正在被 discovery manager 同步的配置文件，所以要等到配置加载完成。
 				<-reloadReady.C
 				level.Info(logger).Log("--->ScrapeManager reloadReady")
 				// 启动scrapeManager
@@ -824,6 +874,7 @@ func main() {
 
 		// Make sure that sighup handler is registered with a redirect to the channel before the potentially
 		// long and synchronous tsdb init.
+		// tsdb 初始化时间可能很长，确保 sighup 处理函数在这之前注册完成。
 		hup := make(chan os.Signal, 1)
 		signal.Notify(hup, syscall.SIGHUP)
 		cancel := make(chan struct{})
