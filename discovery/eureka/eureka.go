@@ -137,6 +137,7 @@ func NewDiscovery(conf *SDConfig, logger log.Logger) (*Discovery, error) {
 }
 
 func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
+	// 从eureka拉取元数据  http://ip:port/eureka/apps
 	apps, err := fetchApps(ctx, d.server, d.client)
 	if err != nil {
 		return nil, err

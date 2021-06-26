@@ -185,7 +185,7 @@ func main() {
 	)
 
 
-	// 创建实体
+	// 初始化一个flagConfig
 	cfg := flagConfig{
 		notifier: notifier.Options{
 			// 默认注册器注册 cpu 和 go 指标收集器
@@ -198,24 +198,23 @@ func main() {
 		promlogConfig: promlog.Config{},
 	}
 
+	// kingpin库实现cli
 	a := kingpin.New(filepath.Base(os.Args[0]), "The Prometheus monitoring server").UsageWriter(os.Stdout)
 
+	// --version查看版本
 	a.Version(version.Print("prometheus"))
 
+	//--help 快捷方式 -h
 	a.HelpFlag.Short('h')
 
 
-	/**
-	a.Flag()：创建FlagClause并放入到flagGroup中，可以通过a.GetFlag(name)获取到
-		Default()用于设置FlagClause默认值， StringVar(&cfg.configFile)则如果cfg配置覆盖默认值
-	 */
+	// --config.file:默认值prometheus.yml，并将结果赋值给cfg.configFile
 	a.Flag("config.file", "Prometheus configuration file path.").
 		Default("prometheus.yml").StringVar(&cfg.configFile)
 
 	// 监听端口
 	a.Flag("web.listen-address", "Address to listen on for UI, API, and telemetry.").
 		Default("0.0.0.0:9090").StringVar(&cfg.web.ListenAddress)
-
 
 	webConfig := toolkit_webflag.AddFlags(a)
 
@@ -371,9 +370,11 @@ func main() {
 	// 添加日志设置的标志位参数，有日志级别（[debug, info, warn, error]"）和日志格式（[logfmt, json]）
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
 
-	// parse方法解析命令行参数，并初始化到cfg对象中
 	// 解析、校验参数
+	// os.Args获取命令行参数
+	// a.Parse方法解析命令行参数，并初始化到cfg对象中
 	_, err := a.Parse(os.Args[1:])
+	fmt.Print(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
 		a.Usage(os.Args[1:])
@@ -473,7 +474,6 @@ func main() {
 			if cfg.tsdb.RetentionDuration != 0 && cfg.tsdb.RetentionDuration/10 < maxBlockDuration {
 				maxBlockDuration = cfg.tsdb.RetentionDuration / 10
 			}
-
 			cfg.tsdb.MaxBlockDuration = maxBlockDuration
 		}
 	}
@@ -528,8 +528,8 @@ func main() {
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
 
 		/**
-
-		一共有两个 discovery.Manager 一个discoveryManagerScrape，服务scrape，一个是discoveryManagerNotify， 服务notify
+		一共有两个 discovery.Manager 一个discoveryManagerScrape，服务于scrape，用于targets的自动发现，
+		另一个是discoveryManagerNotify， 服务于notify，用于告警alertmanager的自动发现
 
 		discoveryManagerScrape组件用于服务发现，当前版本支持多种服务发现系统，比如kuberneters等，
 		通过方法discovery.NewManager完成初始化，

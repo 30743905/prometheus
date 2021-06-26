@@ -239,6 +239,7 @@ func (p *Pod) buildPod(pod *apiv1.Pod) *targetgroup.Group {
 			continue
 		}
 		// Otherwise create one target for each container/port combination.
+		// pod_id和containerPort组合target的address
 		for _, port := range c.Ports {
 			ports := strconv.FormatUint(uint64(port.ContainerPort), 10)
 			addr := net.JoinHostPort(pod.Status.PodIP, ports)
