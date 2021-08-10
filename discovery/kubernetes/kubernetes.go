@@ -318,7 +318,7 @@ func mapSelector(rawSelector []SelectorConfig) roleSelector {
 	return rs
 }
 
-const resyncPeriod = 10 * time.Minute
+const resyncPeriod = 3 * time.Minute //todo  10
 
 // Run implements the discoverer interface.
 func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
