@@ -180,13 +180,21 @@ func (n *Node) buildNode(node *apiv1.Node) *targetgroup.Group {
 	tg := &targetgroup.Group{
 		Source: nodeSource(node),
 	}
+	//node的Annotation和Label转成tg标签
 	tg.Labels = nodeLabels(node)
 
+	//node的address，node的多种ip优先级查找
 	addr, addrMap, err := nodeAddress(node)
 	if err != nil {
 		level.Warn(n.logger).Log("msg", "No node address found", "err", err)
 		return nil
 	}
+	//将node.Status.DaemonEndpoints.KubeletEndpoint.Port端口号拼接到nodeIP上组成__address__
+	/**
+	node.Status.DaemonEndpoints.KubeletEndpoint.Port:kubelet监听端口，默认：10250
+	每个Node节点上都运行一个 Kubelet 服务进程，默认监听 10250 端口，接收并执行 Master 发来的指令，管理 Pod 及 Pod 中的容器。
+	每个 Kubelet 进程会在 API Server 上注册所在Node节点的信息，定期向 Master 节点汇报该节点的资源使用情况，并通过 cAdvisor 监控节点和容器的资源。
+	 */
 	addr = net.JoinHostPort(addr, strconv.FormatInt(int64(node.Status.DaemonEndpoints.KubeletEndpoint.Port), 10))
 
 	t := model.LabelSet{
@@ -198,6 +206,8 @@ func (n *Node) buildNode(node *apiv1.Node) *targetgroup.Group {
 		ln := strutil.SanitizeLabelName(nodeAddressPrefix + string(ty))
 		t[model.LabelName(ln)] = lv(a[0])
 	}
+
+	//加入到tg的targets数组中
 	tg.Targets = append(tg.Targets, t)
 
 	return tg
