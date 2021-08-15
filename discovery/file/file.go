@@ -181,6 +181,7 @@ type Discovery struct {
 	paths      []string
 	watcher    *fsnotify.Watcher
 	interval   time.Duration
+	//文件最后修改时间戳 key:文件名  value：时间戳
 	timestamps map[string]float64
 	lock       sync.RWMutex
 
@@ -211,6 +212,8 @@ func NewDiscovery(conf *SDConfig, logger log.Logger) *Discovery {
 func (d *Discovery) listFiles() []string {
 	var paths []string
 	for _, p := range d.paths {
+		// 列出与指定的模式 pattern 完全匹配的文件或目录（匹配原则同上）
+		// Glob(pattern string) (matches []string, err error)
 		files, err := filepath.Glob(p)
 		if err != nil {
 			level.Error(d.logger).Log("msg", "Error expanding glob", "glob", p, "err", err)
@@ -241,6 +244,7 @@ func (d *Discovery) watchFiles() {
 
 // Run implements the Discoverer interface.
 func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
+	//fsnotify 能监控指定文件夹内 文件的修改情况，如 文件的 增加、删除、修改、重命名等操作。
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		level.Error(d.logger).Log("msg", "Error adding file watcher", "err", err)
@@ -251,6 +255,7 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 
 	d.refresh(ctx, ch)
 
+	// d.interval即为：refresh_interval
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
@@ -357,7 +362,7 @@ func (d *Discovery) refresh(ctx context.Context, ch chan<- []*targetgroup.Group)
 	// Send empty updates for sources that disappeared.
 	for f, n := range d.lastRefresh {
 		m, ok := ref[f]
-		if !ok || n > m {
+		if !ok || n > m {//文件被删，则发送空target
 			level.Debug(d.logger).Log("msg", "file_sd refresh found file that should be removed", "file", f)
 			d.deleteTimestamp(f)
 			for i := m; i < n; i++ {
@@ -418,6 +423,7 @@ func (d *Discovery) readFile(filename string) ([]*targetgroup.Group, error) {
 		if tg.Labels == nil {
 			tg.Labels = model.LabelSet{}
 		}
+		// 添加__meta_filepath标签
 		tg.Labels[fileSDFilepathLabel] = model.LabelValue(filename)
 	}
 

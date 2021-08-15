@@ -782,8 +782,8 @@ func main() {
 		// Termination handler.
 		// 创建监听退出chan
 		term := make(chan os.Signal, 1)
-		//pkill信号syscall.SIGTERM
-		//ctrl+c信号os.Interrupt
+		//syscall.SIGTERM: kill不加-9时 pid.
+		//os.Interrupt: ctrl+c信号
 		//首先我们创建一个os.Signal channel，然后使用signal.Notify注册要接收的信号。
 		signal.Notify(term, os.Interrupt, syscall.SIGTERM)
 		cancel := make(chan struct{})

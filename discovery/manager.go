@@ -173,7 +173,8 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 	for name, scfg := range cfg {
 		// 根据scfg，注册服务发现实例
 		/**
-		其中m.registerProviders的主要作用就是根据cfg（配置）注册所有provider实例，保存在m.providers
+		其中m.registerProviders的主要作用就是根据scfg（配置）注册provider实例，保存在m.providers
+		每个job注册成一个provider
 		 */
 		failedCount += m.registerProviders(scfg, name)
 		// 设置标签
@@ -244,6 +245,7 @@ func (m *Manager) sender() {
 	for {
 		select {
 		case <-m.ctx.Done():
+			//退出
 			return
 		case <-ticker.C: // Some discoverers send updates too often so we throttle these with the ticker.
 			select {

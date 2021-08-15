@@ -206,6 +206,7 @@ reload方法会根据job_name比较targetSets，scrapePools和scrapeConfigs的�
 
 */
 func (m *Manager) reload() {
+	level.Info(m.logger).Log("scrape reload:", "---------->")
 	//加锁
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
