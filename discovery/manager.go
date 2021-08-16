@@ -371,6 +371,7 @@ type StaticProvider struct {
 func (sd *StaticProvider) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 	// We still have to consider that the consumer exits right away in which case
 	// the context will be canceled.
+	fmt.Printf("========>>>")
 	select {
 	case ch <- sd.TargetGroups:
 	case <-ctx.Done():

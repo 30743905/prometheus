@@ -278,11 +278,13 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 			// different combinations of operations. For all practical purposes
 			// this is inaccurate.
 			// The most reliable solution is to reload everything if anything happens.
+			level.Info(d.logger).Log("--->file refresh:", "<-d.watcher.Events")
 			d.refresh(ctx, ch)
 
 		case <-ticker.C:
 			// Setting a new watch after an update might fail. Make sure we don't lose
 			// those files forever.
+			level.Info(d.logger).Log("--->file refresh:", "<-ticker.C")
 			d.refresh(ctx, ch)
 
 		case err := <-d.watcher.Errors:
@@ -351,6 +353,8 @@ func (d *Discovery) refresh(ctx context.Context, ch chan<- []*targetgroup.Group)
 			ref[p] = d.lastRefresh[p]
 			continue
 		}
+		tg , err := json. Marshal(tgroups)
+		level.Info(d.logger).Log("-->write tg to channel: ", tg)
 		select {
 		case ch <- tgroups:
 		case <-ctx.Done():
@@ -363,6 +367,7 @@ func (d *Discovery) refresh(ctx context.Context, ch chan<- []*targetgroup.Group)
 	for f, n := range d.lastRefresh {
 		m, ok := ref[f]
 		if !ok || n > m {//文件被删，则发送空target
+			level.Info(d.logger).Log("-->", "file_sd refresh found file that should be removed", "file", f, ok, n, m)
 			level.Debug(d.logger).Log("msg", "file_sd refresh found file that should be removed", "file", f)
 			d.deleteTimestamp(f)
 			for i := m; i < n; i++ {
