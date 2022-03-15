@@ -280,6 +280,10 @@ func (m *Manager) updateGroup(poolKey poolKey, tgs []*targetgroup.Group) {
 	if _, ok := m.targets[poolKey]; !ok {
 		m.targets[poolKey] = make(map[string]*targetgroup.Group)
 	}
+
+
+
+
 	for _, tg := range tgs {
 		if tg != nil { // Some Discoverers send nil target group so need to check for it to avoid panics.
 			m.targets[poolKey][tg.Source] = tg
@@ -371,7 +375,6 @@ type StaticProvider struct {
 func (sd *StaticProvider) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 	// We still have to consider that the consumer exits right away in which case
 	// the context will be canceled.
-	fmt.Printf("========>>>")
 	select {
 	case ch <- sd.TargetGroups:
 	case <-ctx.Done():

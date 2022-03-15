@@ -15,6 +15,7 @@ package kubernetes
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -57,16 +58,31 @@ func NewPod(l log.Logger, pods cache.SharedInformer) *Pod {
 		logger:   l,
 		queue:    workqueue.NewNamed("pod"),
 	}
+	/**
+	通过informer.AddEventHandler函数可以为pod资源添加资源事件回调方法，支持3种资源事件回调方法：
+		AddFunc
+		UpdateFunc
+		DeleteFunc
+	 */
 	p.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(o interface{}) {
+			k, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(o)
+			l.Log("--->add:", k)
+
 			podAddCount.Inc()
 			p.enqueue(o)
 		},
 		DeleteFunc: func(o interface{}) {
+			k, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(o)
+			l.Log("--->delete:", k)
+
 			podDeleteCount.Inc()
 			p.enqueue(o)
 		},
 		UpdateFunc: func(_, o interface{}) {
+			k, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(o)
+			l.Log("--->update:", k)
+
 			podUpdateCount.Inc()
 			p.enqueue(o)
 		},
@@ -111,6 +127,7 @@ func (p *Pod) process(ctx context.Context, ch chan<- []*targetgroup.Group) bool 
 	defer p.queue.Done(keyObj)
 	key := keyObj.(string)
 
+	//与 MetaNamespaceKeyFunc() 功能相反的是 SplitMetaNamespaceKey() 函数，它将传入的 Key 分解，返回对象所在的命名空间和对象名称。
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return true
@@ -121,6 +138,9 @@ func (p *Pod) process(ctx context.Context, ch chan<- []*targetgroup.Group) bool 
 		return true
 	}
 	if !exists {
+		fmt.Println("---->does not exist", key)
+		//pod被删除时，exists=false
+		// 然后发送targets为空的tg，即移除
 		send(ctx, ch, &targetgroup.Group{Source: podSourceFromNamespaceAndName(namespace, name)})
 		return true
 	}

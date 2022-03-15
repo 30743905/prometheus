@@ -72,6 +72,7 @@ func NewNode(l log.Logger, inf cache.SharedInformer) *Node {
 }
 
 func (n *Node) enqueue(obj interface{}) {
+	//即接受一个object，生成它的namepace/name的字符串
 	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 	if err != nil {
 		return

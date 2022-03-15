@@ -90,6 +90,7 @@ var (
 )
 
 func init() {
+	// 注册prometheus_build_info指标
 	prometheus.MustRegister(version.NewCollector("prometheus"))
 
 	var err error
@@ -138,14 +139,14 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 	for _, f := range c.featureList {
 		opts := strings.Split(f, ",")
 		for _, o := range opts {
-			switch o {  //https://prometheus.io/docs/prometheus/latest/querying/basics/#modifier
+			switch o { //https://prometheus.io/docs/prometheus/latest/querying/basics/#modifier
 			case "promql-at-modifier": // 2.25新增
 				c.enablePromQLAtModifier = true
 				level.Info(logger).Log("msg", "Experimental promql-at-modifier enabled")
 			case "promql-negative-offset":
 				c.enablePromQLNegativeOffset = true
 				level.Info(logger).Log("msg", "Experimental promql-negative-offset enabled")
-			case "remote-write-receiver"://2.25新增 可以将prometheus当成一个远程写，the remote write receiver endpoint is /api/v1/write
+			case "remote-write-receiver": //2.25新增 可以将prometheus当成一个远程写，the remote write receiver endpoint is /api/v1/write
 				c.web.RemoteWriteReceiver = true
 				level.Info(logger).Log("msg", "Experimental remote-write-receiver enabled")
 			case "expand-external-labels": //2.27新增，external_labels中支持环境变量
@@ -157,7 +158,7 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 				允许使用 --enable-feature=exemplar-storage 标志来启用内存样本存储。其实深挖这个特性的话，背后包含了一套相对完整的理论，
 				这个技术最初是 2018 年 Google 在一次分享中公开的，主要是为了能更好的度量系统的特定域内的性能指标，简单来说就当作是 metrics 系统
 				与 trace 系统结合的一种方式吧，有兴趣的小伙伴可以深入了解下。就目前而言，还有一些问题需要解决；
-				 */
+				*/
 				c.tsdb.MaxExemplars = maxExemplars
 				level.Info(logger).Log("msg", "Experimental in-memory exemplar storage enabled", "maxExemplars", maxExemplars)
 			case "":
@@ -184,7 +185,6 @@ func main() {
 		newFlagRetentionDuration model.Duration
 	)
 
-
 	// 初始化一个flagConfig
 	cfg := flagConfig{
 		notifier: notifier.Options{
@@ -206,7 +206,6 @@ func main() {
 
 	//--help 快捷方式 -h
 	a.HelpFlag.Short('h')
-
 
 	// --config.file:默认值prometheus.yml，并将结果赋值给cfg.configFile
 	a.Flag("config.file", "Prometheus configuration file path.").
@@ -237,7 +236,7 @@ func main() {
 	./prometheus --config.file=prometheus.yml --web.external-url=http://x.x.x.x:9090
 	./alertmanager --config.file=alertmanager.yml --web.external-url=http://x.x.x.x:9093
 
-	 */
+	*/
 	a.Flag("web.external-url",
 		"The URL under which Prometheus is externally reachable (for example, if Prometheus is served via a reverse proxy). Used for generating relative and absolute links back to Prometheus itself. If the URL has a path portion, it will be used to prefix all HTTP endpoints served by Prometheus. If omitted, relevant URL components will be derived automatically.").
 		PlaceHolder("<URL>").StringVar(&cfg.prometheusURL)
@@ -296,7 +295,7 @@ func main() {
 	//#将数据保留多长时间。默认15天
 	a.Flag("storage.tsdb.retention.time", "How long to retain samples in storage. When this flag is set it overrides \"storage.tsdb.retention\". If neither this flag nor \"storage.tsdb.retention\" nor \"storage.tsdb.retention.size\" is set, the retention time defaults to "+defaultRetentionString+". Units Supported: y, w, d, h, m, s, ms.").
 		SetValue(&newFlagRetentionDuration)
-   //#可以为块存储的最大字节数。 支持的单位：KB，MB，GB，TB，PB。
+	//#可以为块存储的最大字节数。 支持的单位：KB，MB，GB，TB，PB。
 	a.Flag("storage.tsdb.retention.size", "[EXPERIMENTAL] Maximum number of bytes that can be stored for blocks. A unit is required, supported units: B, KB, MB, GB, TB, PB, EB. Ex: \"512MB\". This flag is experimental and can be changed in future releases.").
 		BytesVar(&cfg.tsdb.MaxBytes)
 
@@ -408,11 +407,11 @@ func main() {
 
 	// Throw error for invalid config before starting other components.
 	/**
-		校验命令行参数配置的 prometheus 配置文件是否有效，如果 配置文件（yml）为空就使用默认配置
-		校验后并没有声明 config 对象并把解析结果赋值给它，这里仅仅是解析。
+	校验命令行参数配置的 prometheus 配置文件是否有效，如果 配置文件（yml）为空就使用默认配置
+	校验后并没有声明 config 对象并把解析结果赋值给它，这里仅仅是解析。
 
-		LoadFile()中第二个参数expandExternalLabels 判断是否支持expandExternalLabels：external_labels中是否支持环境变量解析
-	 */
+	LoadFile()中第二个参数expandExternalLabels 判断是否支持expandExternalLabels：external_labels中是否支持环境变量解析
+	*/
 	if _, err := config.LoadFile(cfg.configFile, false, log.NewNopLogger()); err != nil {
 		level.Error(logger).Log("msg", fmt.Sprintf("Error loading config (--config.file=%s)", cfg.configFile), "err", err)
 		os.Exit(2)
@@ -506,11 +505,11 @@ func main() {
 	Storage组件初始化：声明scraper相关和存储相关结构体变量
 	Prometheus的Storage组件是时序数据库，包含两个：localStorage和remoteStorage．localStorage当前版本指TSDB，
 	用于对metrics的本地存储存储，remoteStorage用于metrics的远程存储，其中fanoutStorage作为localStorage和remoteStorage的读写代理服务器
-	 */
+	*/
 	var (
 		// 本地存储
-		localStorage  = &readyStorage{}
-		scraper       = &readyScrapeManager{}
+		localStorage = &readyStorage{}
+		scraper      = &readyScrapeManager{}
 		// 远程存储
 		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), prometheus.DefaultRegisterer, localStorage.StartTime, cfg.localStoragePath, time.Duration(cfg.RemoteFlushDeadline), scraper)
 		// 读写代理服务器
@@ -523,7 +522,7 @@ func main() {
 
 		/**
 		notifier组件用于发送告警信息给AlertManager，通过方法notifier.NewManager完成初始化
-		 */
+		*/
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
@@ -534,16 +533,16 @@ func main() {
 
 		discoveryManagerScrape组件用于服务发现，当前版本支持多种服务发现系统，比如kuberneters等，
 		通过方法discovery.NewManager完成初始化，
-		 */
-		discoveryManagerScrape  = discovery.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), discovery.Name("scrape"))
+		*/
+		discoveryManagerScrape = discovery.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), discovery.Name("scrape"))
 
 		ctxNotify, cancelNotify = context.WithCancel(context.Background())
 
 		/**
 		discoveryManagerNotify组件用于告警通知服务发现，比如AlertManager服务．也是通过方法discovery.NewManager完成初始化，
 		不同的是，discoveryManagerNotify服务于notify，而discoveryManagerScrape服务与scrape
-		 */
-		discoveryManagerNotify  = discovery.NewManager(ctxNotify, log.With(logger, "component", "discovery manager notify"), discovery.Name("notify"))
+		*/
+		discoveryManagerNotify = discovery.NewManager(ctxNotify, log.With(logger, "component", "discovery manager notify"), discovery.Name("notify"))
 
 		/**
 		scrapeManager组件利用discoveryManagerScrape组件发现的targets，抓取对应targets的所有metrics，
@@ -558,7 +557,7 @@ func main() {
 		/**
 		queryEngine组件用于rules查询和计算，通过方法promql.NewEngine完成初始化
 		// 声明 promql 的引擎配置
-		 */
+		*/
 		opts = promql.EngineOpts{
 			Logger:                   log.With(logger, "component", "query engine"),
 			Reg:                      prometheus.DefaultRegisterer,
@@ -577,7 +576,7 @@ func main() {
 		// 声明 ruleManager
 		ruleManager组件通过方法rules.NewManager完成初始化．其中rules.NewManager的参数涉及多个组件：存储，queryEngine和notifier，
 		整个流程包含rule计算和发送告警
-		 */
+		*/
 		ruleManager = rules.NewManager(&rules.ManagerOptions{
 			Appendable:      fanoutStorage,
 			Queryable:       localStorage,
@@ -598,7 +597,7 @@ func main() {
 	/**
 	从命令行解析的配置项都赋值给 cfg.web 的配置项
 	Web组件用于为Storage组件，queryEngine组件，scrapeManager组件， ruleManager组件和notifier 组件提供外部HTTP访问方式，初始化代码如下:
-	 */
+	*/
 	cfg.web.Context = ctxWeb
 	cfg.web.TSDBRetentionDuration = cfg.tsdb.RetentionDuration
 	cfg.web.TSDBMaxBytes = cfg.tsdb.MaxBytes
@@ -645,14 +644,14 @@ func main() {
 	/**
 	服务组件remoteStorage，webHandler，notifierManager和ScrapeManager的ApplyConfig方法，
 	参数cfg *config.Config中传递的配置文件，是整个文件prometheus.yml
-	 */
+	*/
 	reloaders := []reloader{
 		{
-			name:     "remote_storage",
+			name: "remote_storage",
 			// 存储配置
 			reloader: remoteStorage.ApplyConfig,
 		}, {
-			name:     "web_handler",
+			name: "web_handler",
 			// web配置
 			reloader: webHandler.ApplyConfig,
 		}, {
@@ -674,7 +673,7 @@ func main() {
 			// The Scrape and notifier managers need to reload before the Discovery manager as
 			// they need to read the most updated config when receiving the new targets list.
 			// scrape 和 notifier manager 要在 discovery manager 之前重新加载，因为它们要在获取新的监控目标之前最新配置
-			name:     "scrape",
+			name: "scrape",
 			// scrapeManger配置
 			reloader: scrapeManager.ApplyConfig,
 		}, {
@@ -688,7 +687,7 @@ func main() {
 				return discoveryManagerScrape.ApplyConfig(c)
 			},
 		}, {
-			name:     "notify",
+			name: "notify",
 			// notifier配置
 			reloader: notifierManager.ApplyConfig,
 		}, {
@@ -736,7 +735,7 @@ func main() {
 	// sync.Once is used to make sure we can close the channel at different execution stages(SIGTERM or when the config is loaded).
 	// sync.Once 用于确保在不同的执行阶段（SIGTERM 或加载完配置）关闭 channel。
 	type closeOnce struct {
-		C     chan struct{}
+		C chan struct{}
 		//sync.Once.Do(f func())能保证once只执行一次，无论你是否更换once.Do(xx)这里的方法,这个sync.Once块只会执行一次
 		once  sync.Once
 		Close func()
@@ -776,7 +775,7 @@ func main() {
 	/**
 	oklog.run.Group 和 google errgroup 功能相近，维护一组并发任务的执行。
 	对象g中包含各个服务组件的入口，通过调用Add方法把把这些入口添加到对象g中
-	 */
+	*/
 	var g run.Group
 	{
 		// Termination handler.
@@ -934,14 +933,14 @@ func main() {
 				level.Info(logger).Log("cus_msg", "--->configuration begin reloadConfig")
 				/**
 				加载解析prometheus.yml配置文件，并调用各个组件ApplyConfig()方法将配置传入
-				 */
+				*/
 				if err := reloadConfig(cfg.configFile, cfg.enableExpandExternalLabels, logger, noStepSubqueryInterval, reloaders...); err != nil {
 					return errors.Wrapf(err, "error loading config from %q", cfg.configFile)
 				}
 				level.Info(logger).Log("cus_msg", "--->configuration finish reloadConfig")
 				/**
 				配置加载完毕，执行reloadReady.Close()关闭reloadReady.C通道，这样  <-reloadReady.C 阻塞地方可以继续向下执行
-				 */
+				*/
 				reloadReady.Close()
 				level.Info(logger).Log("cus_msg", "--->configuration begin webHandler.Ready")
 				webHandler.Ready()
@@ -960,7 +959,7 @@ func main() {
 			func() error {
 				level.Info(logger).Log("cus_msg", "--->rule manager begin")
 				<-reloadReady.C
-				level.Info(logger).Log("cus_msg",  "--->rule reloadReady")
+				level.Info(logger).Log("cus_msg", "--->rule reloadReady")
 				ruleManager.Run()
 				level.Info(logger).Log("cus_msg", "--->rule ruleManager.Run")
 				return nil
@@ -1020,7 +1019,7 @@ func main() {
 
 				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
 				localStorage.Set(db, startTimeMargin)
-				time.Sleep(time.Duration(10)*time.Second)
+				time.Sleep(time.Duration(10) * time.Second)
 				level.Info(logger).Log("cus_msg", "--->tsdb localStorage.Set")
 				close(dbOpen)
 				<-cancel
@@ -1077,7 +1076,7 @@ func main() {
 
 	/**
 	通过对象g，调用方法run，启动所有服务组件
-	 */
+	*/
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
@@ -1141,7 +1140,7 @@ type reloader struct {
 
 /**
 通过reloadConfig方法，加载各个服务组件的配置项
- */
+*/
 func reloadConfig(filename string, expandExternalLabels bool, logger log.Logger, noStepSuqueryInterval *safePromQLNoStepSubqueryInterval, rls ...reloader) (err error) {
 	start := time.Now()
 	timings := []interface{}{}
@@ -1168,7 +1167,7 @@ func reloadConfig(filename string, expandExternalLabels bool, logger log.Logger,
 		rstart := time.Now()
 		/**
 		调用各个组件的func (m *Manager) ApplyConfig(cfg map[string]Configs)方法
-		 */
+		*/
 		if err := rl.reloader(conf); err != nil {
 			level.Error(logger).Log("msg", "Failed to apply configuration", "err", err)
 			failed = true

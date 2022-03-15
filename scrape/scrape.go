@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -497,8 +498,17 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 // scrape loops for new targets, and stops scrape loops for disappeared targets.
 // It returns after all stopped scrape loops terminated.
 func (sp *scrapePool) sync(targets []*Target) {
+
+	json1, _ := json.Marshal(targets)
+	level.Info(sp.logger).Log("--->sync:", json1)
+
 	var (
-		// target 标记
+		/**
+		存在三种场景：
+			1、key存在，value有值则表示：需要启动的loop
+			2、key存在，但是value=nil，则表示该loop已启动，不再需要继续启动；
+			3、key不存在，activeTargets存在，则表示之前target存在，但是这次该target被剔除了
+		 */
 		uniqueLoops = make(map[uint64]loop)
 		// 采集周期
 		interval    = time.Duration(sp.config.ScrapeInterval)
@@ -539,16 +549,18 @@ func (sp *scrapePool) sync(targets []*Target) {
 
 			sp.activeTargets[hash] = t
 			sp.loops[hash] = l
-			// 启动该loop
+			// 需要启动的loop
 			uniqueLoops[hash] = l
 		} else {
 			// This might be a duplicated target.
+			// 是重复目标
 			if _, ok := uniqueLoops[hash]; !ok {
+				// key存在，但是value=nil表示已激活运行状态，不需要启动
 				uniqueLoops[hash] = nil
 			}
-			// 该target对应的loop已经运行，设置最新的标签信息
 			// Need to keep the most updated labels information
 			// for displaying it in the Service Discovery web page.
+			// 新抓取目标的原始标签标签，用于在 web 上显示
 			sp.activeTargets[hash].SetDiscoveredLabels(t.DiscoveredLabels())
 		}
 	}
@@ -560,8 +572,12 @@ func (sp *scrapePool) sync(targets []*Target) {
 	// Stop and remove old targets and scraper loops.
 	// 判断原来的Target列表是否存在失效的Target，若存在则移除
 	for hash := range sp.activeTargets {
-		// 检查该hash对应的标记是否存在，放过不存在执行清除逻辑
+		// uniqueLoops中不存在的loop则表示需要清除的target
 		if _, ok := uniqueLoops[hash]; !ok {
+
+			json2,_ := json.Marshal(sp.activeTargets[hash])
+			level.Info(sp.logger).Log("--->delete loop:", json2)
+
 			wg.Add(1)
 			// 异步清除
 			go func(l loop) {
@@ -579,13 +595,20 @@ func (sp *scrapePool) sync(targets []*Target) {
 
 	sp.targetMtx.Unlock()
 
+	// 并发启动新目标的抓取循环
 	targetScrapePoolTargetsAdded.WithLabelValues(sp.config.JobName).Set(float64(len(uniqueLoops)))
 	forcedErr := sp.refreshTargetLimitErr()
 	for _, l := range sp.loops {
 		l.setForcedError(forcedErr)
 	}
+
+
+	json3,_ := json.Marshal(sp.activeTargets)
+	level.Info(sp.logger).Log("--->run loop:", json3)
+
 	for _, l := range uniqueLoops {
 		if l != nil {
+			level.Info(sp.logger).Log("--->run loop:", l)
 			// 通过协程启动scrapeLoop的run方法，采集存储指标
 			// sp.sync方法起了一个协程运行scrapeLoop的run方法去采集并存储监控指标(metrics)，run方法实现如下：
 			go l.run(interval, timeout, nil)
@@ -595,7 +618,9 @@ func (sp *scrapePool) sync(targets []*Target) {
 	// This covers the case of flapping targets. If the server is under high load, a new scraper
 	// may be active and tries to insert. The old scraper that didn't terminate yet could still
 	// be inserting a previous sample set.
-	// 等待所有执行完成
+	// 等待停止中的 scraper 终止。
+	// 如果服务器负载较高，旧的 scraper 还没有终止，抓取相同目标的新 scraper 可能已经启动，
+	// 这时旧的 scraper 仍然会插入之前的样本集。
 	wg.Wait()
 }
 

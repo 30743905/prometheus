@@ -338,12 +338,18 @@ func (g *Group) run(ctx context.Context) {
 	})
 
 	iter := func() {
+		/**
+		prometheus_rule_group_iterations_total#rule_group
+		*/
 		g.metrics.IterationsScheduled.WithLabelValues(GroupKey(g.file, g.name)).Inc()
 
 		start := time.Now()
 		g.Eval(ctx, evalTimestamp)
 		timeSinceStart := time.Since(start)
 
+		/**
+		prometheus_rule_group_duration_seconds
+		*/
 		g.metrics.IterationDuration.Observe(timeSinceStart.Seconds())
 		g.setEvaluationTime(timeSinceStart)
 		g.setLastEvaluation(start)
@@ -476,6 +482,9 @@ func (g *Group) GetEvaluationTime() time.Duration {
 
 // setEvaluationTime sets the time in seconds the last evaluation took.
 func (g *Group) setEvaluationTime(dur time.Duration) {
+	/**
+	prometheus_rule_group_last_duration_seconds
+	*/
 	g.metrics.GroupLastDuration.WithLabelValues(GroupKey(g.file, g.name)).Set(dur.Seconds())
 
 	g.mtx.Lock()
