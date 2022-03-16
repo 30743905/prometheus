@@ -377,6 +377,11 @@ func (m *Manager) TargetsDropped() map[string][]*Target {
 }
 
 // getFqdn returns a FQDN if it's possible, otherwise falls back to hostname.
+/**
+	net.LookupAddr():然后返回与该IP地址匹配的主机列表
+	FQDN是完全合格域名/全程域名缩写，Fully Qualified Domain Name，即是域名，访问时将由DNS进行解析，得到IP。
+	FQDN = Hostname + DomainName
+ */
 func getFqdn() (string, error) {
 	hostname, err := os.Hostname()
 	if err != nil {

@@ -333,6 +333,7 @@ func (ng *Engine) SetQueryLogger(l QueryLogger) {
 	ng.queryLogger = l
 
 	if l != nil {
+		// prometheus_engine_query_log_enabled指标
 		ng.metrics.queryLogEnabled.Set(1)
 	} else {
 		ng.metrics.queryLogEnabled.Set(0)
