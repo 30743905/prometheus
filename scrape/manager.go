@@ -253,6 +253,24 @@ func (m *Manager) reload() {
 }
 
 // setJitterSeed calculates a global jitterSeed per server relying on extra label set.
+/**
+多prometheus实例
+	1、在HA场景下，不同的prometheus实例可能拉取相同的target。
+	2、多个prometheus实例同时启动时，开始拉取的时间也要随机错开，否则会出现多个实例同时拉取同一个target的现象。
+
+通过全局的scrape jitterSeed实现：
+	不同实例：jitterSeed是跟特定prometheus实例相关的uint64哈希值，不同实例的jitterSeed不同；
+	单实例不同target: 使用target哈希值与jitterSeed做异或操作，得到target拉取的启动时间，不同的target启动时间不同；
+
+不同实例的hostname/externalLabels一般不同，故计算出来的jitterSeed值也不同。
+
+jitterSeed=hash({hostname}+{extertalLabels})
+例子：
+LAPTOP-VN2PT87L{lab_01="value-01", lab_02="value-02", lab_03="value-03"}
+jitterSeed = 15287462998504944822
+
+
+ */
 func (m *Manager) setJitterSeed(labels labels.Labels) error {
 	h := fnv.New64a()
 	hostname, err := getFqdn()

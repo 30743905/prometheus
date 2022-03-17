@@ -1169,8 +1169,11 @@ sp.sync方法起了一个协程运行scrapePool的run方法去采集并存储监
  */
 func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	fmt.Println("----------->run::", time.Now())
+
+	// target被拉取前，先随机等待一个时间，然后再用interval固定间隔循环拉取
+	// 不同target有不同的等待时间，这样就可以将不同target的开始时间错开。
 	select {
-		//检测超时
+		//检测超时 scraper.offset()随机计算一个休眠时间，这个时间不能大于interval，如果大于会减去interval
 		case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
 			// Continue after a scraping offset.
 			//停止，退出
@@ -1183,7 +1186,7 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 
 	alignedScrapeTime := time.Now().Round(0)
 	// 根据interval设置定时器
-	//设置定时器
+	//设置定时器 interval固定间隔拉取
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
