@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pkg/errors"
 	prom_testutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -312,8 +313,71 @@ func TestHead_ReadWAL(t *testing.T) {
 	}
 }
 
+func TestHead_WALMultiRef22(t *testing.T) {
+	head, w := newTestHead(t, 1000*60*60*5, false)
+
+	for i := 0; i<100; i++ {
+		app := head.Appender(context.Background())
+		ref11, err1 := app.Append(0, labels.FromStrings("foo", "bar"), time.Now().Unix(), 1)
+		fmt.Println(ref11)
+		fmt.Println(err1)
+	}
+
+
+	app := head.Appender(context.Background())
+	ref1, err := app.Append(0, labels.FromStrings("foo", "bar"), 100, 1)
+	require.NoError(t, app.Commit())
+
+	// Add another sample outside chunk range to mmap a chunk.
+	app = head.Appender(context.Background())
+	_, err = app.Append(0, labels.FromStrings("foo", "bar"), 1500, 2)
+	require.NoError(t, app.Commit())
+
+	require.NoError(t, head.Truncate(1600))
+
+	app = head.Appender(context.Background())
+	ref2, err := app.Append(0, labels.FromStrings("foo", "bar"), 1700, 3)
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+	require.Equal(t, 3.0, prom_testutil.ToFloat64(head.metrics.chunksCreated))
+
+	// Add another sample outside chunk range to mmap a chunk.
+	app = head.Appender(context.Background())
+	_, err = app.Append(0, labels.FromStrings("foo", "bar"), 2000, 4)
+	require.NoError(t, err)
+	require.NoError(t, app.Commit())
+	require.Equal(t, 4.0, prom_testutil.ToFloat64(head.metrics.chunksCreated))
+
+	require.NotEqual(t, ref1, ref2, "Refs are the same")
+	require.NoError(t, head.Close())
+
+	w, err = wal.New(nil, nil, w.Dir(), false)
+	require.NoError(t, err)
+
+	opts := DefaultHeadOptions()
+	opts.ChunkRange = 1000
+	opts.ChunkDirRoot = w.Dir()
+	head, err = NewHead(nil, nil, w, opts)
+	require.NoError(t, err)
+	require.NoError(t, head.Init(0))
+	defer func() {
+		require.NoError(t, head.Close())
+	}()
+
+	q, err := NewBlockQuerier(head, 0, 2100)
+	require.NoError(t, err)
+	series := query(t, q, labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"))
+	require.Equal(t, map[string][]tsdbutil.Sample{`{foo="bar"}`: {
+		sample{100, 1},
+		sample{1500, 2},
+		sample{1700, 3},
+		sample{2000, 4},
+	}}, series)
+}
+
+
 func TestHead_WALMultiRef(t *testing.T) {
-	head, w := newTestHead(t, 1000, false)
+	head, w := newTestHead(t, 1000*60*60*5, false)
 
 	require.NoError(t, head.Init(0))
 

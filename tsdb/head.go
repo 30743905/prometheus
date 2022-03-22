@@ -2086,8 +2086,7 @@ const (
 type stripeSeries struct {
 	size                    int
 	series                  []map[uint64]*memSeries // 记录refId到memSeries的映射
-	// 而hash值是依据labelSets的值而算出来
-	hashes                  []seriesHashmap // 记录hash值到memSeries,hash冲突采用拉链法
+	hashes                  []seriesHashmap // 记录hash值到memSeries,hash冲突采用拉链法,而hash值是依据labelSets的值而算出来
 	// 由于在Prometheus中会频繁的对map[hash/refId]memSeries进行操作，例如检查这个labelSet对应的memSeries是否存在，
 	// 不存在则创建等。由于golang的map非线程安全，所以其采用了分段锁去拆分锁。
 	locks                   []stripeLock // 分段锁
@@ -2470,6 +2469,7 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	// Based on Gorilla white papers this offers near-optimal compression ratio
 	// so anything bigger that this has diminishing returns and increases
 	// the time range within which we have to decompress all samples.
+	// 一个chunk最多120个sample
 	const samplesPerChunk = 120
 
 	c := s.head()
@@ -2492,13 +2492,18 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	// If we reach 25% of a chunk's desired sample count, set a definitive time
 	// at which to start the next chunk.
 	// At latest it must happen at the timestamp set when the chunk was cut.
+	// 到1/4时，重新计算nextAt(120点以后的时间)
 	if numSamples == samplesPerChunk/4 {
+		// 推断并设置下一个headChunk创建时间。这个函数有一个分母有一个+1操作，是为了防止分母为0。
 		s.nextAt = computeChunkEndTime(c.minTime, c.maxTime, s.nextAt)
 	}
+	// 到达时间，创建新的headChunk
 	if t >= s.nextAt {
+		// 当达到nextAt后，写入老的headChunk数据，并新建headChunk：
 		c = s.cutNewHeadChunk(t, chunkDiskMapper)
 		chunkCreated = true
 	}
+	// 向headChunk插入t/v数据
 	s.app.Append(t, v)
 
 	c.maxTime = t

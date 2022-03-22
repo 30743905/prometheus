@@ -69,6 +69,8 @@ Prometheus内存中的存储结构大致如上，Gorilla的压缩算法提高了
  */
 type MemPostings struct {
 	mtx     sync.RWMutex
+	// map[labelName]map[labelValue]postingsList
+	// labelName --> labelValue --> []posting
 	m       map[string]map[string][]uint64
 	ordered bool
 }
