@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -1435,7 +1436,7 @@ func (a *headAppender) log() error {
 		rec = enc.Series(a.series, buf)
 		buf = rec[:0]
 
-		if err := a.head.wal.Log(rec); err != nil {//tsdb/head.go:1418
+		if err := a.head.wal.Log(rec); err != nil { //tsdb/head.go:1418
 			return errors.Wrap(err, "log series")
 		}
 	}
@@ -2077,16 +2078,16 @@ const (
 // 为了让Prometheus在内存和磁盘中保存更大的数据量，势必需要进行压缩。而memChunk在内存中保存的正是采用XOR算法压缩过的数据
 
 /**
-	但是ref仅仅是供Prometheus内部使用的，如果用户要查询某个具体的时间序列，通常会利用一堆的label用以唯一指定一个时间序列。那么如何通过一堆label最快地找到对应的series呢？
-	哈希表显然是最佳的方案。基于label计算一个哈希值，维护一张哈希值与memSeries的映射表，如果产生哈希碰撞的话，则直接用label进行匹配。
-	因此，Prometheus有必要在内存中维护如下所示的两张哈希表，从而无论利用ref还是label都能很快找到对应的memSeries：
-		series map[uint64]*memSeries // ref到memSeries的映射
-		hashes map[uint64][]*memSeries // labels的哈希值到memSeries的映射
- */
+但是ref仅仅是供Prometheus内部使用的，如果用户要查询某个具体的时间序列，通常会利用一堆的label用以唯一指定一个时间序列。那么如何通过一堆label最快地找到对应的series呢？
+哈希表显然是最佳的方案。基于label计算一个哈希值，维护一张哈希值与memSeries的映射表，如果产生哈希碰撞的话，则直接用label进行匹配。
+因此，Prometheus有必要在内存中维护如下所示的两张哈希表，从而无论利用ref还是label都能很快找到对应的memSeries：
+	series map[uint64]*memSeries // ref到memSeries的映射
+	hashes map[uint64][]*memSeries // labels的哈希值到memSeries的映射
+*/
 type stripeSeries struct {
-	size                    int
-	series                  []map[uint64]*memSeries // 记录refId到memSeries的映射
-	hashes                  []seriesHashmap // 记录hash值到memSeries,hash冲突采用拉链法,而hash值是依据labelSets的值而算出来
+	size   int
+	series []map[uint64]*memSeries // 记录refId到memSeries的映射
+	hashes []seriesHashmap         // 记录hash值到memSeries,hash冲突采用拉链法,而hash值是依据labelSets的值而算出来
 	// 由于在Prometheus中会频繁的对map[hash/refId]memSeries进行操作，例如检查这个labelSet对应的memSeries是否存在，
 	// 不存在则创建等。由于golang的map非线程安全，所以其采用了分段锁去拆分锁。
 	locks                   []stripeLock // 分段锁
@@ -2224,7 +2225,7 @@ func (s *stripeSeries) getOrSet(hash uint64, lset labels.Labels, createSeries fu
 	s.size = 16384 = 2^128 = 16k
 
 		当b为2^n时：a%b=a&(b-1)
-	 */
+	*/
 	i := hash & uint64(s.size-1)
 	s.locks[i].Lock()
 
@@ -2283,28 +2284,38 @@ func (s sample) V() float64                        { return s.v }
 const stripSize = 1 << 14
 
 // 为表达直观，已将Prometheus原生数据结构简化
- */
+*/
 type memSeries struct {
 	sync.RWMutex
 
 	// ref 相当于这个series的uid :在getOrCreate函数中给出了明确的解释，使用递增的正整数作为ref，而没有使用hash因为hash random且不利于索引
-	ref           uint64
+	ref uint64
 	// lset 这个series 的label map
 	lset          labels.Labels
 	mmappedChunks []*mmappedChunk
 	// headChunk 即memChunk 在这个series在这段时间内的数据集合
-	headChunk     *memChunk
-	chunkRange    int64
-	firstChunkID  int
+	// headChunk 一般都是active chunk 一直有samples写入
+	headChunk    *memChunk
+	chunkRange   int64
+	firstChunkID int
 
-	nextAt        int64 // Timestamp at which to cut the next chunk.
-	sampleBuf     [4]sample
+	// nextAt ：下一个headChunk的开始时间
+	// 设置一个最低的限制，下一个chunk必须创建的时间，其实是受 const samplesPerChunk = 120(当sample 达到120个的时候回cutHeadChunk) 和 chunkRange(default：2h) 影响的。
+	nextAt int64 // Timestamp at which to cut the next chunk.
+	//  保存最新的4个sample
+	sampleBuf [4]sample
+	// memSeries是否处于等待提交状态
 	pendingCommit bool // Whether there are samples waiting to be committed to this series.
 
 	app chunkenc.Appender // Current appender for the chunk.
 
+	/**
+	memChunkPool: 由于golang内建的GC机制会影响应用的性能，为了减少GC，golang提供了对象重用的机制，也就是sync.Pool对象池。
+	sync.Pool是可伸缩的，并发安全的。其大小仅受限于内存的大小，可以被看作是一个存放可重用对象的值的容器。
+	设计的目的是存放已经分配的但是暂时不用的对象，在需要用到的时候直接从pool中取。
+	*/
 	memChunkPool *sync.Pool
-
+	// txs: 事务ID记录的一个结构体. 这个又是另一个模块（isolation）的知识体系
 	txs *txRing
 }
 
@@ -2338,9 +2349,15 @@ func (s *memSeries) maxTime() int64 {
 	return c.maxTime
 }
 
+/**
+  将目前的headchunk 写入磁盘同时在内存中建立映射保存元数据,memSeries的指针在指向新的headChunk
+	当前的headChunk达到full chunk条件的时候，会使用该方法重新初始化一个新的headChunk，并将memSeries的headChunk指向该chunk。
+*/
 func (s *memSeries) cutNewHeadChunk(mint int64, chunkDiskMapper *chunks.ChunkDiskMapper) *memChunk {
 	s.mmapCurrentHeadChunk(chunkDiskMapper)
 
+	// 初始化chunk的时候 chunk 为 XORChunk，并使用XORChunk中的Appender()方法 返回一个xorAppender
+	// 结构体，这个结构体具体实现了Append方法，并赋值给 s.app。
 	s.headChunk = &memChunk{
 		chunk:   chunkenc.NewXORChunk(),
 		minTime: mint,
@@ -2359,18 +2376,29 @@ func (s *memSeries) cutNewHeadChunk(mint int64, chunkDiskMapper *chunks.ChunkDis
 	return s.headChunk
 }
 
+/**
+  将headChunk 写入磁盘 建立M-map映射
+  	将目前的headChunk 写入到磁盘中，同时会建立内存映射。内存映射主要是 mmappedChunks []*mmappedChunk 进行内存中存储。
+*/
 func (s *memSeries) mmapCurrentHeadChunk(chunkDiskMapper *chunks.ChunkDiskMapper) {
 	if s.headChunk == nil {
 		// There is no head chunk, so nothing to m-map here.
 		return
 	}
 
+	/**
+	当 active chunk 写满sample后，就会使用 chunks.ChunkDiskMapper -> chunkDiskMapper.WriteChunk() 写入到磁盘中，
+	同时生成 chunkRef，这个值 represent ：该时间序列磁盘中的chunk 在内存中的映射。
+	mmappedChunks []*mmappedChunk 维护着该时间序列的所有的chunk。
+	*/
+	// 将full chunk 写入到磁盘
 	chunkRef, err := chunkDiskMapper.WriteChunk(s.ref, s.headChunk.minTime, s.headChunk.maxTime, s.headChunk.chunk)
 	if err != nil {
 		if err != chunks.ErrChunkDiskMapperClosed {
 			panic(err)
 		}
 	}
+	// 建立内存映射
 	s.mmappedChunks = append(s.mmappedChunks, &mmappedChunk{
 		ref:        chunkRef,
 		numSamples: uint16(s.headChunk.chunk.NumSamples()),
@@ -2403,21 +2431,26 @@ func (s *memSeries) appendable(t int64, v float64) error {
 // chunk returns the chunk for the chunk id from memory or by m-mapping it from the disk.
 // If garbageCollect is true, it means that the returned *memChunk
 // (and not the chunkenc.Chunk inside it) can be garbage collected after it's usage.
+/**
+  根据id，找到想查找的chunk在内存映射中的索引，从而找到该chunk
+*/
 func (s *memSeries) chunk(id int, chunkDiskMapper *chunks.ChunkDiskMapper) (chunk *memChunk, garbageCollect bool, err error) {
 	// ix represents the index of chunk in the s.mmappedChunks slice. The chunk id's are
 	// incremented by 1 when new chunk is created, hence (id - firstChunkID) gives the slice index.
 	// The max index for the s.mmappedChunks slice can be len(s.mmappedChunks)-1, hence if the ix
 	// is len(s.mmappedChunks), it represents the next chunk, which is the head chunk.
+	// ix是 该chunk在m-map中的索引. chunk的id 是从1开始逐渐增加的1,2,3，...
 	ix := id - s.firstChunkID
 	if ix < 0 || ix > len(s.mmappedChunks) {
 		return nil, false, storage.ErrNotFound
 	}
-	if ix == len(s.mmappedChunks) {
+	if ix == len(s.mmappedChunks) { // 查找的是active chunk 正在执行写入的headChunk
 		if s.headChunk == nil {
 			return nil, false, errors.New("invalid head chunk")
 		}
-		return s.headChunk, false, nil
+		return s.headChunk, false, nil // 由于是active chunk 所以不能被GC 回收。
 	}
+	// 查找的chunk已经落盘,根据m-map的ref 在磁盘中查找对应的chunk 这个落盘的chunk是没有mint，maxt
 	chk, err := chunkDiskMapper.Chunk(s.mmappedChunks[ix].ref)
 	if err != nil {
 		if _, ok := err.(*chunks.CorruptionErr); ok {
@@ -2425,11 +2458,12 @@ func (s *memSeries) chunk(id int, chunkDiskMapper *chunks.ChunkDiskMapper) (chun
 		}
 		return nil, false, err
 	}
+	// 这里是一个trick，从池子里拿一个memChunk内存空间 然后进行初始化，这个是并发安全的。
 	mc := s.memChunkPool.Get().(*memChunk)
 	mc.chunk = chk
 	mc.minTime = s.mmappedChunks[ix].minTime
 	mc.maxTime = s.mmappedChunks[ix].maxTime
-	return mc, true, nil
+	return mc, true, nil // true: 表示该chunk使用后，可以被回收。
 }
 
 func (s *memSeries) chunkID(pos int) int {
@@ -2439,17 +2473,22 @@ func (s *memSeries) chunkID(pos int) int {
 // truncateChunksBefore removes all chunks from the series that
 // have no timestamp at or after mint.
 // Chunk IDs remain unchanged.
+/**
+这个函数的作用是给一个时间，把这个时间点之前的chunk都从series中剔除掉。
+*/
 func (s *memSeries) truncateChunksBefore(mint int64) (removed int) {
+	// headchunk的最大时间小于给的这个时间段 说明 把这个series中所有的chunk都要清零。
 	if s.headChunk != nil && s.headChunk.maxTime < mint {
 		// If head chunk is truncated, we can truncate all mmapped chunks.
 		removed = 1 + len(s.mmappedChunks)
 		s.firstChunkID += removed
-		s.headChunk = nil
-		s.mmappedChunks = nil
+		s.headChunk = nil     // 清空
+		s.mmappedChunks = nil // 清空
 		return removed
 	}
+	// 判断每一个落盘的chunk中的时间 与 截断时间对比
 	if len(s.mmappedChunks) > 0 {
-		for i, c := range s.mmappedChunks {
+		for i, c := range s.mmappedChunks { // 这个c其实不是chunk 只是磁盘某个chunk中在内存中的元数据
 			if c.maxTime >= mint {
 				break
 			}
@@ -2470,12 +2509,13 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	// so anything bigger that this has diminishing returns and increases
 	// the time range within which we have to decompress all samples.
 	// 一个chunk最多120个sample
+	// 这个就是定义了 一个full chunk的一个条件，当有120个samples 就证明full chunk，如果设置的采集时间是每15s采集一次，那么一个full chunk（每一个时间序列的）需要15s * 120 = 30min
 	const samplesPerChunk = 120
 
 	c := s.head()
 
 	if c == nil {
-		if len(s.mmappedChunks) > 0 && s.mmappedChunks[len(s.mmappedChunks)-1].maxTime >= t {
+		if len(s.mmappedChunks) > 0 && s.mmappedChunks[len(s.mmappedChunks)-1].maxTime >= t { // 该headChunk的最大时间都大于插入的时间t了，所以这个sample无法被append
 			// Out of order sample. Sample timestamp is already in the mmaped chunks, so ignore it.
 			return false, false
 		}
@@ -2493,15 +2533,29 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	// at which to start the next chunk.
 	// At latest it must happen at the timestamp set when the chunk was cut.
 	// 到1/4时，重新计算nextAt(120点以后的时间)
+	/**
+	headChunk 满足什么条件才会触发memSeries指针指向新的headChunk，以及落盘和创建内存映射呢？
+		1、headChunk达到120个samples
+		2、headChunk时间跨度达到默认chunkRange设置的2小时
+	*/
+
+	fmt.Println("numSamples" + strconv.Itoa(numSamples))
 	if numSamples == samplesPerChunk/4 {
 		// 推断并设置下一个headChunk创建时间。这个函数有一个分母有一个+1操作，是为了防止分母为0。
+		fmt.Println(s.nextAt)
 		s.nextAt = computeChunkEndTime(c.minTime, c.maxTime, s.nextAt)
+		fmt.Println("=========")
+		fmt.Println(c.minTime)
+		fmt.Println(c.maxTime)
+		fmt.Println(s.nextAt)
+		fmt.Println("...........")
 	}
 	// 到达时间，创建新的headChunk
 	if t >= s.nextAt {
 		// 当达到nextAt后，写入老的headChunk数据，并新建headChunk：
 		c = s.cutNewHeadChunk(t, chunkDiskMapper)
 		chunkCreated = true
+		fmt.Println("==============>创建新chunk")
 	}
 	// 向headChunk插入t/v数据
 	s.app.Append(t, v)
@@ -2513,6 +2567,7 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	s.sampleBuf[2] = s.sampleBuf[3]
 	s.sampleBuf[3] = sample{t: t, v: v}
 
+	// 是否需要被隔离？ 如果是appendID == 0 则不需要。 主要是在查询和插入的时候。
 	if appendID > 0 {
 		s.txs.add(appendID)
 	}
@@ -2540,6 +2595,7 @@ func computeChunkEndTime(start, cur, max int64) int64 {
 // iterator returns a chunk iterator.
 // It is unsafe to call this concurrently with s.append(...) without holding the series lock.
 func (s *memSeries) iterator(id int, isoState *isolationState, chunkDiskMapper *chunks.ChunkDiskMapper, it chunkenc.Iterator) chunkenc.Iterator {
+	// 根据id 从 memseries中找到对应的c -> memchunk
 	c, garbageCollect, err := s.chunk(id, chunkDiskMapper)
 	// TODO(fabxc): Work around! An error will be returns when a querier have retrieved a pointer to a
 	// series's chunk, which got then garbage collected before it got
@@ -2557,8 +2613,9 @@ func (s *memSeries) iterator(id int, isoState *isolationState, chunkDiskMapper *
 		}
 	}()
 
+	// ix： c 在 memseries中的索引值
 	ix := id - s.firstChunkID
-
+	// c 有多少个numSamples
 	numSamples := c.chunk.NumSamples()
 	stopAfter := numSamples
 
@@ -2585,15 +2642,17 @@ func (s *memSeries) iterator(id int, isoState *isolationState, chunkDiskMapper *
 		// to return.
 		it := s.txs.iterator()
 		for index := 0; index < appendIDsToConsider; index++ {
+			// 没有初始化txs 所以就是postion=0  第一个位置的appendID
 			appendID := it.At()
 			if appendID <= isoState.maxAppendID { // Easy check first.
-				if _, ok := isoState.incompleteAppends[appendID]; !ok {
+				if _, ok := isoState.incompleteAppends[appendID]; !ok { // 没有检测到这个某个sample的完成操作
 					it.Next()
 					continue
 				}
 			}
+			// 还没到目前chunk的上一个chunk或者到了上一个chunk但是没遍历完呢。 大于0 说明 index目前curChunk上
 			stopAfter = numSamples - (appendIDsToConsider - index)
-			if stopAfter < 0 {
+			if stopAfter < 0 { // index还没遍历到 curChunk上
 				stopAfter = 0 // Stopped in a previous chunk.
 			}
 			break
@@ -2606,7 +2665,7 @@ func (s *memSeries) iterator(id int, isoState *isolationState, chunkDiskMapper *
 
 	if id-s.firstChunkID < len(s.mmappedChunks) {
 		if stopAfter == numSamples {
-			return c.chunk.Iterator(it)
+			return c.chunk.Iterator(it) // index 到了curChunk的末尾，其中it 传入的object可以将Iterator实例化，
 		}
 		if msIter, ok := it.(*stopIterator); ok {
 			msIter.Iterator = c.chunk.Iterator(msIter.Iterator)

@@ -45,6 +45,7 @@ import (
 
 func newTestHead(t testing.TB, chunkRange int64, compressWAL bool) (*Head, *wal.WAL) {
 	dir, err := ioutil.TempDir("", "test")
+	fmt.Println("dir>" + dir)
 	require.NoError(t, err)
 	wlog, err := wal.NewSize(nil, nil, filepath.Join(dir, "wal"), 32768, compressWAL)
 	require.NoError(t, err)
@@ -313,16 +314,47 @@ func TestHead_ReadWAL(t *testing.T) {
 	}
 }
 
-func TestHead_WALMultiRef22(t *testing.T) {
-	head, w := newTestHead(t, 1000*60*60*5, false)
+func TestHead_WALMultiRef33(t *testing.T) {
+	duration := int64(1 * time.Minute / time.Millisecond)
+	head, _ := newTestHead(t, duration, false)
 
-	for i := 0; i<100; i++ {
-		app := head.Appender(context.Background())
-		ref11, err1 := app.Append(0, labels.FromStrings("foo", "bar"), time.Now().Unix(), 1)
-		fmt.Println(ref11)
-		fmt.Println(err1)
+	fmt.Println("start....")
+	fmt.Println(time.Now().Unix())
+
+	for i := 0; i < 1000000; i++ {
+
+		for j := 0; j < 100; j++ {
+			app := head.Appender(context.Background())
+			var idx string
+			//idx = strconv.Itoa(j % 3)
+			idx = strconv.Itoa(1)
+			_, err := app.Append(0, labels.FromStrings("foo"+idx, "bar"+idx), time.Now().Unix(), float64(j))
+			if err != nil {
+				fmt.Println(err)
+			}
+			app.Commit()
+			time.Sleep(time.Second * 1)
+		}
+		//app.Commit()
+		fmt.Println("i=" + strconv.Itoa(i))
+		time.Sleep(time.Second * 1)
 	}
+	fmt.Println("===========")
+}
 
+func TestHead_WALMultiRef22(t *testing.T) {
+	head, w := newTestHead(t, 1000*60*3, false)
+
+	for i := 0; i < 100; i++ {
+		var idx string
+		idx = strconv.Itoa(i % 5)
+		app := head.Appender(context.Background())
+		ref, err := app.Append(0, labels.FromStrings("foo"+idx, "bar"+idx), time.Now().Unix(), 1)
+		fmt.Println(ref)
+		fmt.Println(err)
+		app.Commit()
+		time.Sleep(time.Second * 15)
+	}
 
 	app := head.Appender(context.Background())
 	ref1, err := app.Append(0, labels.FromStrings("foo", "bar"), 100, 1)
@@ -374,7 +406,6 @@ func TestHead_WALMultiRef22(t *testing.T) {
 		sample{2000, 4},
 	}}, series)
 }
-
 
 func TestHead_WALMultiRef(t *testing.T) {
 	head, w := newTestHead(t, 1000*60*60*5, false)
