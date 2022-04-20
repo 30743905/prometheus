@@ -322,20 +322,20 @@ func TestHead_WALMultiRef33(t *testing.T) {
 	fmt.Println(time.Now().Unix())
 
 	for i := 0; i < 1000000; i++ {
-
-		for j := 0; j < 100; j++ {
-			app := head.Appender(context.Background())
+		app := head.Appender(context.Background())
+		for j := 0; j < 5; j++ {
+			//app := head.Appender(context.Background())
 			var idx string
-			//idx = strconv.Itoa(j % 3)
-			idx = strconv.Itoa(1)
+			idx = strconv.Itoa(j % 3)
+			//idx = strconv.Itoa(1)
 			_, err := app.Append(0, labels.FromStrings("foo"+idx, "bar"+idx), time.Now().Unix(), float64(j))
 			if err != nil {
 				fmt.Println(err)
 			}
-			app.Commit()
-			time.Sleep(time.Second * 1)
+			//app.Commit()
+			//time.Sleep(time.Second * 1)
 		}
-		//app.Commit()
+		app.Commit()
 		fmt.Println("i=" + strconv.Itoa(i))
 		time.Sleep(time.Second * 1)
 	}

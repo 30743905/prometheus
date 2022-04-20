@@ -208,12 +208,12 @@ type scrapePool struct {
 	appendable storage.Appendable
 	logger     log.Logger
 	// 取消
-	cancel     context.CancelFunc
+	cancel context.CancelFunc
 
 	// mtx must not be taken after targetMtx.
-	mtx            sync.Mutex
-	config         *config.ScrapeConfig
-	client         *http.Client
+	mtx    sync.Mutex
+	config *config.ScrapeConfig
+	client *http.Client
 	// 所有运行的loop
 	loops          map[uint64]loop
 	targetLimitHit bool // Internal state to speed up the target_limit checks.
@@ -222,7 +222,7 @@ type scrapePool struct {
 	// activeTargets and loops must always be synchronized to have the same
 	// set of hashes.
 	// 正在运行的target
-	activeTargets  map[uint64]*Target
+	activeTargets map[uint64]*Target
 	// 无效的target
 	droppedTargets []*Target
 
@@ -254,7 +254,7 @@ type labelsMutator func(labels.Labels) labels.Labels
 
 /**
 scrape pool利用newLoop去为该job下的所有target生成对应的loop：
- */
+*/
 func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, jitterSeed uint64, logger log.Logger) (*scrapePool, error) {
 	targetScrapePools.Inc()
 	if logger == nil {
@@ -448,7 +448,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 // the currently running scraper with the resulting set and returns all scraped and dropped targets.
 /**
 sp.Sync方法引入了Target结构体，把[]*targetgroup.Group类型的groups转换为targets类型，其中每个groups对应一个job_name下多个targets．随后，调用sp.sync方法，同步scrape服务
- */
+*/
 // targetgroup.Group代表scrape_configs下一个job_name配置项
 func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	sp.mtx.Lock()
@@ -485,7 +485,7 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 
 	sp.sync方法对比新的Target列表和原来的Target列表，若发现不在原来的Target列表中，则新建该targets的scrapeLoop，
 	通过协程启动scrapeLoop的run方法，并发采集存储指标．然后判断原来的Target列表是否存在失效的Target，若存在，则移除
-	 */
+	*/
 	sp.sync(all)
 
 	targetSyncIntervalLength.WithLabelValues(sp.config.JobName).Observe(
@@ -508,12 +508,12 @@ func (sp *scrapePool) sync(targets []*Target) {
 			1、key存在，value有值则表示：需要启动的loop
 			2、key存在，但是value=nil，则表示该loop已启动，不再需要继续启动；
 			3、key不存在，activeTargets存在，则表示之前target存在，但是这次该target被剔除了
-		 */
+		*/
 		uniqueLoops = make(map[uint64]loop)
 		// 采集周期
-		interval    = time.Duration(sp.config.ScrapeInterval)
+		interval = time.Duration(sp.config.ScrapeInterval)
 		// 指标采集超时时间
-		timeout     = time.Duration(sp.config.ScrapeTimeout)
+		timeout = time.Duration(sp.config.ScrapeTimeout)
 		// 指标采集的限额
 		sampleLimit = int(sp.config.SampleLimit)
 		labelLimits = &labelLimits{
@@ -575,7 +575,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 		// uniqueLoops中不存在的loop则表示需要清除的target
 		if _, ok := uniqueLoops[hash]; !ok {
 
-			json2,_ := json.Marshal(sp.activeTargets[hash])
+			json2, _ := json.Marshal(sp.activeTargets[hash])
 			level.Info(sp.logger).Log("--->delete loop:", json2)
 
 			wg.Add(1)
@@ -602,8 +602,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 		l.setForcedError(forcedErr)
 	}
 
-
-	json3,_ := json.Marshal(sp.activeTargets)
+	json3, _ := json.Marshal(sp.activeTargets)
 	level.Info(sp.logger).Log("--->run loop:", json3)
 
 	for _, l := range uniqueLoops {
@@ -761,7 +760,7 @@ var userAgentHeader = fmt.Sprintf("Prometheus/%s", version.Version)
 
 /**
 依赖scrape实现数据的抓取，使用GET方法。
- */
+*/
 func (s *targetScraper) scrape(ctx context.Context, w io.Writer) (string, error) {
 	if s.req == nil {
 		// 新建Http Request
@@ -831,14 +830,15 @@ type loop interface {
 	getCache() *scrapeCache
 	disableEndOfRunStalenessMarkers()
 }
+
 /**
-	添加到本地数据库或者远程数据库的一个返回值:
- */
+添加到本地数据库或者远程数据库的一个返回值:
+*/
 type cacheEntry struct {
 	ref      uint64
-	lastIter uint64		//上一个版本号
-	hash     uint64		// hash值
-	lset     labels.Labels	//包含的labels
+	lastIter uint64        //上一个版本号
+	hash     uint64        // hash值
+	lset     labels.Labels //包含的labels
 }
 
 type scrapeLoop struct {
@@ -876,21 +876,21 @@ type scrapeCache struct {
 
 	// Parsed string to an entry with information about the actual label set
 	// and its storage reference.
-	series map[string]*cacheEntry  //map类型,key是metric,value是cacheEntry结构体
+	series map[string]*cacheEntry //map类型,key是metric,value是cacheEntry结构体
 
 	// Cache of dropped metric strings and their iteration. The iteration must
 	// be a pointer so we can update it without setting a new entry with an unsafe
 	// string in addDropped().
-	droppedSeries map[string]*uint64  //缓存不合法指标(metrics)
+	droppedSeries map[string]*uint64 //缓存不合法指标(metrics)
 
 	// seriesCur and seriesPrev store the labels of series that were seen
 	// in the current and previous scrape.
 	// We hold two maps and swap them out to save allocations.
-	seriesCur  map[uint64]labels.Labels   //缓存本次scrape的指标(metrics)
-	seriesPrev map[uint64]labels.Labels   //缓存上次scrape的指标(metrics)
+	seriesCur  map[uint64]labels.Labels //缓存本次scrape的指标(metrics)
+	seriesPrev map[uint64]labels.Labels //缓存上次scrape的指标(metrics)
 
-	metaMtx  sync.Mutex  //同步锁
-	metadata map[string]*metaEntry   //元数据
+	metaMtx  sync.Mutex            //同步锁
+	metadata map[string]*metaEntry //元数据
 }
 
 // metaEntry holds meta information about a metric.
@@ -1166,20 +1166,20 @@ func newScrapeLoop(ctx context.Context,
 
 /**
 sp.sync方法起了一个协程运行scrapePool的run方法去采集并存储监控指标(metrics)，run方法实现如下：
- */
+*/
 func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	fmt.Println("----------->run::", time.Now())
 
 	// target被拉取前，先随机等待一个时间，然后再用interval固定间隔循环拉取
 	// 不同target有不同的等待时间，这样就可以将不同target的开始时间错开。
 	select {
-		//检测超时 scraper.offset()随机计算一个休眠时间，这个时间不能大于interval，如果大于会减去interval
-		case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
-			// Continue after a scraping offset.
-			//停止，退出
-		case <-sl.ctx.Done():
-			close(sl.stopped)
-			return
+	//检测超时 scraper.offset()随机计算一个休眠时间，这个时间不能大于interval，如果大于会减去interval
+	case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
+		// Continue after a scraping offset.
+		//停止，退出
+	case <-sl.ctx.Done():
+		close(sl.stopped)
+		return
 	}
 
 	var last time.Time
@@ -1222,7 +1222,7 @@ mainLoop:
 		/**
 		scrapeAndReport方法主要实现两个功能：指标采集(scrape)和指标存储．此外，为了实现对象的复用，在采集(scrape)过程中，使用了sync.Pool机制提高性能，
 		即每次采集(scrape)完成后，都会申请和本次采集(scrape)指标存储空间一样的大小的bytes，加入到buffer中，以备下次指标采集(scrape)直接使用．
-		 */
+		*/
 		last = sl.scrapeAndReport(interval, timeout, last, scrapeTime, errc)
 
 		select {
@@ -1275,7 +1275,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 			app.Rollback()
 			return
 		}
-		err = app.Commit()//storage/fanout.go:175
+		err = app.Commit() //storage/fanout.go:175
 		if err != nil {
 			level.Error(sl.l).Log("msg", "Scrape commit failed", "err", err)
 		}
@@ -1493,7 +1493,7 @@ loop:
 			continue
 		case textparse.EntryComment:
 			continue
-		default://非上述类型
+		default: //非上述类型
 		}
 		total++
 

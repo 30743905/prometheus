@@ -1177,7 +1177,15 @@ func (a *initAppender) Rollback() error {
 }
 
 // Appender returns a new Appender on the database.
+// 会根据具体情形决定返回的 Appender 实例
+// Appender 实例共两类
+// initAppender 会在接收到第一个数据点时初始化 Head 的起始时间(minTime、maxTime)，参见：head.initTime(t)逻辑，然后才是交由h.appender()处理
+// headAppender 逻辑相对简单
 func (h *Head) Appender(_ context.Context) storage.Appender {
+	/**
+	指标：prometheus_tsdb_head_active_appenders
+	描述：当前活跃的appender交易数
+	*/
 	h.metrics.activeAppenders.Inc()
 
 	// The head cache might not have a starting point yet. The init appender
@@ -2194,6 +2202,12 @@ func (s *stripeSeries) getByID(id uint64) *memSeries {
 }
 
 func (s *stripeSeries) getByHash(hash uint64, lset labels.Labels) *memSeries {
+	/**
+	位运算(&)效率要比取模运算(%)高很多，主要原因是位运算直接对内存数据进行操作，不需要转成十进制，因此处理速度非常快。
+		a % b == a & (b - 1)
+		前提：b 为 2^n
+		s.size = 16384 = 2 ^ 14
+	*/
 	i := hash & uint64(s.size-1)
 
 	s.locks[i].RLock()
@@ -2222,7 +2236,7 @@ func (s *stripeSeries) getOrSet(hash uint64, lset labels.Labels, createSeries fu
 
 	然而上述数据结构仅仅只能支持对于时间序列的精确查询，必须严格指定每一个label的值从而能够唯一地确定一条时间序列。但很多时候，模糊查询才是更为常用的。例如，我们想知道访问路径为/的各类HTTP请求的数目（请求的方法可以为GET，POST等等），此时提交给Prometheus的查询条件如下：
 
-	s.size = 16384 = 2^128 = 16k
+	s.size = 16384 = 2^14 = 16k
 
 		当b为2^n时：a%b=a&(b-1)
 	*/
