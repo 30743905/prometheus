@@ -17,6 +17,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"github.com/pkg/errors"
+	"go.uber.org/atomic"
 	"hash"
 	"io"
 	"io/ioutil"
@@ -25,9 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-
-	"github.com/pkg/errors"
-	"go.uber.org/atomic"
+	"time"
 
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	tsdb_errors "github.com/prometheus/prometheus/tsdb/errors"
@@ -281,6 +282,7 @@ func (cdm *ChunkDiskMapper) WriteChunk(seriesRef uint64, mint, maxt int64, chk c
 	}
 
 	if cdm.shouldCutNewFile(len(chk.Bytes())) {
+		fmt.Println("--->cdm.shouldCutNewFile:", cdm.curFileSize(), cdm.curFileSize(), len(chk.Bytes()), time.Now())
 		if err := cdm.cut(); err != nil {
 			return 0, err
 		}
@@ -289,6 +291,7 @@ func (cdm *ChunkDiskMapper) WriteChunk(seriesRef uint64, mint, maxt int64, chk c
 	// if len(chk.Bytes())+MaxHeadChunkMetaSize >= writeBufferSize, it means that chunk >= the buffer size;
 	// so no need to flush here, as we have to flush at the end (to not keep partial chunks in buffer).
 	if len(chk.Bytes())+MaxHeadChunkMetaSize < cdm.writeBufferSize && cdm.chkWriter.Available() < MaxHeadChunkMetaSize+len(chk.Bytes()) {
+		fmt.Println("--->len(chk.Bytes())+MaxHeadChunkMetaSize < cdm.writeBufferSize && cdm.chkWriter.Available() < MaxHeadChunkMetaSize+len(chk.Bytes():cdm.flushBuffer()", time.Now())
 		if err := cdm.flushBuffer(); err != nil {
 			return 0, err
 		}
@@ -300,6 +303,7 @@ func (cdm *ChunkDiskMapper) WriteChunk(seriesRef uint64, mint, maxt int64, chk c
 	// The upper 4 bytes are for the head chunk file index and
 	// the lower 4 bytes are for the head chunk file offset where to start reading this chunk.
 	chkRef = chunkRef(uint64(cdm.curFileSequence), uint64(cdm.curFileSize()))
+	fmt.Println("--->chunkRef:", chkRef, cdm.curFileSequence, cdm.curFileSize(), time.Now())
 
 	binary.BigEndian.PutUint64(cdm.byteBuf[bytesWritten:], seriesRef)
 	bytesWritten += SeriesRefSize
@@ -323,6 +327,7 @@ func (cdm *ChunkDiskMapper) WriteChunk(seriesRef uint64, mint, maxt int64, chk c
 	}
 
 	if maxt > cdm.curFileMaxt {
+		fmt.Println("--->maxt > cdm.curFileMaxt:", maxt, cdm.curFileMaxt, time.Now())
 		cdm.curFileMaxt = maxt
 	}
 
@@ -331,6 +336,7 @@ func (cdm *ChunkDiskMapper) WriteChunk(seriesRef uint64, mint, maxt int64, chk c
 	if len(chk.Bytes())+MaxHeadChunkMetaSize >= cdm.writeBufferSize {
 		// The chunk was bigger than the buffer itself.
 		// Flushing to not keep partial chunks in buffer.
+		fmt.Println("--->len(chk.Bytes())+MaxHeadChunkMetaSize >= cdm.writeBufferSize:cdm.flushBuffer()", time.Now())
 		if err := cdm.flushBuffer(); err != nil {
 			return 0, err
 		}
@@ -448,6 +454,7 @@ func (cdm *ChunkDiskMapper) writeCRC32() error {
 // flushBuffer flushes the current in-memory chunks.
 // Assumes that writePathMtx is _write_ locked before calling this method.
 func (cdm *ChunkDiskMapper) flushBuffer() error {
+	fmt.Println("--->ChunkDiskMapper flushBuffer")
 	if err := cdm.chkWriter.Flush(); err != nil {
 		return err
 	}

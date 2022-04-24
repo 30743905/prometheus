@@ -2380,6 +2380,7 @@ func (s *memSeries) cutNewHeadChunk(mint int64, chunkDiskMapper *chunks.ChunkDis
 
 	// Set upper bound on when the next chunk must be started. An earlier timestamp
 	// may be chosen dynamically at a later point.
+	fmt.Println("--->chunkRange:", s.chunkRange)
 	s.nextAt = rangeForTimestamp(mint, s.chunkRange)
 
 	app, err := s.headChunk.chunk.Appender()
@@ -2406,6 +2407,7 @@ func (s *memSeries) mmapCurrentHeadChunk(chunkDiskMapper *chunks.ChunkDiskMapper
 	mmappedChunks []*mmappedChunk 维护着该时间序列的所有的chunk。
 	*/
 	// 将full chunk 写入到磁盘
+	fmt.Println("--->writechunk:", s.headChunk.minTime, s.headChunk.maxTime, time.Now())
 	chunkRef, err := chunkDiskMapper.WriteChunk(s.ref, s.headChunk.minTime, s.headChunk.maxTime, s.headChunk.chunk)
 	if err != nil {
 		if err != chunks.ErrChunkDiskMapperClosed {
@@ -2556,20 +2558,17 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	fmt.Println("numSamples" + strconv.Itoa(numSamples))
 	if numSamples == samplesPerChunk/4 {
 		// 推断并设置下一个headChunk创建时间。这个函数有一个分母有一个+1操作，是为了防止分母为0。
-		fmt.Println(s.nextAt)
+		fmt.Println("s.nextAt:", s.nextAt, time.Now())
 		s.nextAt = computeChunkEndTime(c.minTime, c.maxTime, s.nextAt)
-		fmt.Println("=========")
-		fmt.Println(c.minTime)
-		fmt.Println(c.maxTime)
-		fmt.Println(s.nextAt)
-		fmt.Println("...........")
+		fmt.Println("=========", c.minTime, c.maxTime, s.nextAt, time.Now())
 	}
 	// 到达时间，创建新的headChunk
 	if t >= s.nextAt {
 		// 当达到nextAt后，写入老的headChunk数据，并新建headChunk：
 		c = s.cutNewHeadChunk(t, chunkDiskMapper)
 		chunkCreated = true
-		fmt.Println("==============>创建新chunk")
+		fmt.Println("==============>创建新chunk:", time.Now())
+
 	}
 	// 向headChunk插入t/v数据
 	s.app.Append(t, v)
