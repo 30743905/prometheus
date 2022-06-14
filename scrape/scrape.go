@@ -240,6 +240,7 @@ type scrapeLoopOptions struct {
 	honorTimestamps bool
 	mrc             []*relabel.Config
 	cache           *scrapeCache
+	toLower         bool
 }
 
 const maxAheadTime = 10 * time.Minute
@@ -292,6 +293,7 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, jitterSeed 
 			jitterSeed,
 			opts.honorTimestamps,
 			opts.labelLimits,
+			opts.toLower,
 		)
 	}
 
@@ -409,6 +411,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 				honorTimestamps: honorTimestamps,
 				mrc:             mrc,
 				cache:           cache,
+				toLower:         sp.config.ToLower,
 			})
 		)
 		wg.Add(1)
@@ -500,6 +503,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 				honorLabels:     honorLabels,
 				honorTimestamps: honorTimestamps,
 				mrc:             mrc,
+				toLower:         sp.config.ToLower,
 			})
 
 			sp.activeTargets[hash] = t
@@ -767,6 +771,7 @@ type scrapeLoop struct {
 	buffers         *pool.Pool
 	jitterSeed      uint64
 	honorTimestamps bool
+	toLower         bool
 	forcedErr       error
 	forcedErrMtx    sync.Mutex
 	labelLimits     *labelLimits
@@ -1038,6 +1043,7 @@ func newScrapeLoop(ctx context.Context,
 	jitterSeed uint64,
 	honorTimestamps bool,
 	labelLimits *labelLimits,
+	toLower bool,
 ) *scrapeLoop {
 	if l == nil {
 		l = log.NewNopLogger()
@@ -1061,6 +1067,7 @@ func newScrapeLoop(ctx context.Context,
 		parentCtx:           ctx,
 		honorTimestamps:     honorTimestamps,
 		labelLimits:         labelLimits,
+		toLower:             toLower,
 	}
 	sl.ctx, sl.cancel = context.WithCancel(ctx)
 
@@ -1192,6 +1199,9 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	if scrapeErr == nil {
 		b = buf.Bytes()
+		if sl.toLower {
+			b = bytes.ToLower(b)
+		}
 		// NOTE: There were issues with misbehaving clients in the past
 		// that occasionally returned empty results. We don't want those
 		// to falsely reset our buffer size.

@@ -370,6 +370,8 @@ type ScrapeConfig struct {
 	JobName string `yaml:"job_name"`
 	// Indicator whether the scraped metrics should remain unmodified.
 	HonorLabels bool `yaml:"honor_labels,omitempty"`
+	// ADD ToLower
+	ToLower bool `yaml:"to_lower"`
 	// Indicator whether the scraped timestamps should be respected.
 	HonorTimestamps bool `yaml:"honor_timestamps"`
 	// A set of query parameters with which the target is scraped.
