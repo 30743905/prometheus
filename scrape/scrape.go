@@ -246,6 +246,7 @@ type scrapeLoopOptions struct {
 	honorTimestamps bool
 	mrc             []*relabel.Config
 	cache           *scrapeCache
+	toLower         bool
 }
 
 const maxAheadTime = 10 * time.Minute
@@ -302,6 +303,7 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, jitterSeed 
 			jitterSeed,
 			opts.honorTimestamps,
 			opts.labelLimits,
+			opts.toLower,
 		)
 	}
 
@@ -367,20 +369,16 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 	defer sp.mtx.Unlock()
 	targetScrapePoolReloads.Inc()
 	start := time.Now()
-
 	client, err := config_util.NewClientFromConfig(cfg.HTTPClientConfig, cfg.JobName, config_util.WithHTTP2Disabled())
 	if err != nil {
 		targetScrapePoolReloadsFailed.Inc()
 		return errors.Wrap(err, "error creating HTTP client")
 	}
-
 	reuseCache := reusableCache(sp.config, cfg)
 	sp.config = cfg
 	oldClient := sp.client
 	sp.client = client
-
 	targetScrapePoolTargetLimit.WithLabelValues(sp.config.JobName).Set(float64(sp.config.TargetLimit))
-
 	var (
 		wg          sync.WaitGroup
 		interval    = time.Duration(sp.config.ScrapeInterval)
@@ -395,7 +393,6 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 		honorTimestamps = sp.config.HonorTimestamps
 		mrc             = sp.config.MetricRelabelConfigs
 	)
-
 	sp.targetMtx.Lock()
 
 	forcedErr := sp.refreshTargetLimitErr()
@@ -419,6 +416,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 				honorTimestamps: honorTimestamps,
 				mrc:             mrc,
 				cache:           cache,
+				toLower:         sp.config.ToLower,
 			})
 		)
 		wg.Add(1)
@@ -545,6 +543,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 				honorLabels:     honorLabels,
 				honorTimestamps: honorTimestamps,
 				mrc:             mrc,
+				toLower:         sp.config.ToLower,
 			})
 
 			sp.activeTargets[hash] = t
@@ -849,6 +848,7 @@ type scrapeLoop struct {
 	buffers         *pool.Pool
 	jitterSeed      uint64
 	honorTimestamps bool
+	toLower         bool
 	forcedErr       error
 	forcedErrMtx    sync.Mutex
 	labelLimits     *labelLimits
@@ -1135,6 +1135,7 @@ func newScrapeLoop(ctx context.Context,
 	jitterSeed uint64,
 	honorTimestamps bool,
 	labelLimits *labelLimits,
+	toLower bool,
 ) *scrapeLoop {
 	if l == nil {
 		l = log.NewNopLogger()
@@ -1158,6 +1159,7 @@ func newScrapeLoop(ctx context.Context,
 		parentCtx:           ctx,
 		honorTimestamps:     honorTimestamps,
 		labelLimits:         labelLimits,
+		toLower:             toLower,
 	}
 	sl.ctx, sl.cancel = context.WithCancel(ctx)
 
@@ -1249,8 +1251,6 @@ mainLoop:
 // only be cancelled on shutdown, not on reloads.
 func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, appendTime time.Time, errc chan<- error) time.Time {
 	start := time.Now()
-
-	// 记录第一次
 	// Only record after the first scrape.
 	if !last.IsZero() {
 		// 非第一次执行内容
@@ -1265,10 +1265,8 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 	defer sl.buffers.Put(b)
 	//根据上次的占用的空间申请存储空间
 	buf := bytes.NewBuffer(b)
-
 	var total, added, seriesAdded int
 	var err, appErr, scrapeErr error
-
 	app := sl.appender(sl.parentCtx)
 	defer func() {
 		if err != nil {
@@ -1313,6 +1311,9 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	if scrapeErr == nil {
 		b = buf.Bytes()
+		if sl.toLower {
+			b = bytes.ToLower(b)
+		}
 		// NOTE: There were issues with misbehaving clients in the past
 		// that occasionally returned empty results. We don't want those
 		// to falsely reset our buffer size.

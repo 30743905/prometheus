@@ -64,9 +64,12 @@ type ExemplarStorage interface {
 
 // Head handles reads and writes of time series data within a time window.
 type Head struct {
-	chunkRange            atomic.Int64
-	numSeries             atomic.Uint64
-	minTime, maxTime      atomic.Int64 // Current min and max of the samples included in the head.
+	chunkRange atomic.Int64
+	numSeries  atomic.Uint64
+	// minTime: 已经写入的数据点的最小时间戳；
+	// maxTime：已经写入的数据点的最大时间戳；
+	minTime, maxTime atomic.Int64 // Current min and max of the samples included in the head.
+	// minValidTime: 合法最小时间戳, 写入数据点的时间戳小于这个时间戳，Prometheus将直接丢弃，因为promtheus使用的拉模式采集的指标，时间戳是由exporter生成的，一般都在当前写入窗口期内
 	minValidTime          atomic.Int64 // Mint allowed to be added to the head. It shouldn't be lower than the maxt of the last persisted block.
 	lastWALTruncationTime atomic.Int64
 	lastSeriesID          atomic.Uint64
@@ -2432,11 +2435,13 @@ func (s *memSeries) appendable(t int64, v float64) error {
 		return nil
 	}
 	if t < c.maxTime {
+		// 乱序样本
 		return storage.ErrOutOfOrderSample
 	}
 	// We are allowing exact duplicates as we can encounter them in valid cases
 	// like federation and erroring out at that time would be extremely noisy.
 	if math.Float64bits(s.sampleBuf[3].v) != math.Float64bits(v) {
+		// 重复样本
 		return storage.ErrDuplicateSampleForTimestamp
 	}
 	return nil
