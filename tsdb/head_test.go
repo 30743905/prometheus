@@ -335,6 +335,7 @@ func TestHead_WALMultiRef33(t *testing.T) {
 			//app.Commit()
 			//time.Sleep(time.Second * 1)
 		}
+		time.Sleep(time.Second * 1)
 		app.Commit()
 		time.Sleep(time.Second * 1)
 		fmt.Println("i=" + strconv.Itoa(i))
