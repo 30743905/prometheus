@@ -452,6 +452,93 @@ func TestRelabel(t *testing.T) {
 	}
 }
 
+func TestRelabel222(t *testing.T) {
+	tests := []struct {
+		input   labels.Labels
+		relabel []*Config
+		output  labels.Labels
+	}{
+
+		{ // valid case
+			input: labels.FromMap(map[string]string{
+				//"__meta_kubernetes_service_annotation_cib_instance_port": "8812",
+				"__address__": "192.168.1.100:20214",
+			}),
+			relabel: []*Config{
+				{
+					SourceLabels: model.LabelNames{"__meta_kubernetes_service_annotation_cib_instance_port"},
+					Action:       Replace,
+					TargetLabel:  "__instance_port",
+				},
+				{
+					SourceLabels: model.LabelNames{"__instance_port", "__address__"},
+					Action:       Replace,
+					TargetLabel:  "__instance_port",
+					Regex:        MustNewRegexp("();(.+):(.+)"),
+					Replacement:  "${3}",
+				},
+				{
+					SourceLabels: model.LabelNames{"__address__", "__instance_port"},
+					Action:       Replace,
+					TargetLabel:  "cib_instance",
+					Regex:        MustNewRegexp("(.+):(.+);(\\d+)"),
+					Replacement:  "${1}:${3}",
+				},
+			},
+			output: labels.FromMap(map[string]string{
+				"a":    "some-name-value",
+				"name": "value",
+			}),
+		},
+
+		{ // valid case
+			input: labels.FromMap(map[string]string{
+				"a": "some-name-value",
+			}),
+			relabel: []*Config{
+				{
+					SourceLabels: model.LabelNames{"a"},
+					/**
+					[^abc]：匹配 "a","b","c" 之外的任意一个字符
+					[f-k]：匹配 "f"~"k" 之间的任意一个字母
+					[^A-F0-3]：匹配 "A"~"F","0"~"3" 之外的任意一个字符
+
+					*/
+					Regex:       MustNewRegexp("some-([^-]+)-([^,]+)"),
+					Action:      Replace,
+					Replacement: "${2}",
+					TargetLabel: "${1}",
+				},
+			},
+			output: labels.FromMap(map[string]string{
+				"a":    "some-name-value",
+				"name": "value",
+			}),
+		},
+	}
+
+	for _, test := range tests {
+		// Setting default fields, mimicking the behaviour in Prometheus.
+		for _, cfg := range test.relabel {
+			if cfg.Action == "" {
+				cfg.Action = DefaultRelabelConfig.Action
+			}
+			if cfg.Separator == "" {
+				cfg.Separator = DefaultRelabelConfig.Separator
+			}
+			if cfg.Regex.original == "" {
+				cfg.Regex = DefaultRelabelConfig.Regex
+			}
+			if cfg.Replacement == "" {
+				cfg.Replacement = DefaultRelabelConfig.Replacement
+			}
+		}
+
+		res := Process(test.input, test.relabel...)
+		require.Equal(t, test.output, res)
+	}
+}
+
 func TestTargetLabelValidity(t *testing.T) {
 	tests := []struct {
 		str   string

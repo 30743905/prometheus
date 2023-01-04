@@ -6,7 +6,7 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
+// distributed under the License is distributed on an "AS IS"funcIncrease BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
@@ -49,6 +49,57 @@ func TestDeriv(t *testing.T) {
 	require.NoError(t, a.Commit())
 
 	query, err := engine.NewInstantQuery(storage, "deriv(foo[30m])", timestamp.Time(1493712846939))
+	require.NoError(t, err)
+
+	result := query.Exec(context.Background())
+	require.NoError(t, result.Err)
+
+	vec, _ := result.Vector()
+	require.Equal(t, 1, len(vec), "Expected 1 result, got %d", len(vec))
+	require.Equal(t, 0.0, vec[0].V, "Expected 0.0 as value, got %f", vec[0].V)
+}
+
+func TestIncrease(t *testing.T) {
+	// https://github.com/prometheus/prometheus/issues/2674#issuecomment-315439393
+	// This requires more precision than the usual test system offers,
+	// so we test it by hand.
+	storage := teststorage.New(t)
+	defer storage.Close()
+	opts := EngineOpts{
+		Logger:     nil,
+		Reg:        nil,
+		MaxSamples: 10000,
+		Timeout:    100 * time.Second,
+	}
+	engine := NewEngine(opts)
+
+	a := storage.Appender(context.Background())
+
+	metric := labels.FromStrings("__name__", "foo", "tag_cluster", "clusterA")
+	/**
+	2023-01-03 10:36:21		1672713381000	1
+	2023-01-03 10:36:36		1672713396000	3
+	2023-01-03 10:36:51		1672713411000	7
+	2023-01-03 10:37:06		1672713426000	13
+	2023-01-03 10:37:21		1672713441000	15
+	2023-01-03 10:37:36		1672713456000	16
+	2023-01-03 10:37:51		1672713471000	16
+	2023-01-03 10:38:06		1672713486000	18
+
+	*/
+	a.Append(0, metric, 1672713381000, 1.0)
+	a.Append(0, metric, 1672713396000, 3.0)
+	a.Append(0, metric, 1672713411000, 7.0)
+	a.Append(0, metric, 1672713426000, 13.0)
+	a.Append(0, metric, 1672713441000, 15.0)
+
+	a.Append(0, metric, 1672713456000, 16.0)
+	a.Append(0, metric, 1672713471000, 16.0)
+	a.Append(0, metric, 1672713486000, 18.0)
+
+	require.NoError(t, a.Commit())
+
+	query, err := engine.NewInstantQuery(storage, "increase(foo[2m])", timestamp.Time(1672713506000))
 	require.NoError(t, err)
 
 	result := query.Exec(context.Background())

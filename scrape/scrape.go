@@ -547,6 +547,12 @@ func (sp *scrapePool) refreshTargetLimitErr() error {
 func mutateSampleLabels(lset labels.Labels, target *Target, honor bool, rc []*relabel.Config) labels.Labels {
 	lb := labels.NewBuilder(lset)
 
+	/**
+	解决当抓取的 label 与后端 Prometheus 添加 label 冲突时的处理。
+	true: 保留抓取到的 label，忽略与后端 Prometheus 冲突的 label；
+	false: 对冲突的 label，把抓取的 label 前加上 exported_<original-label>，添加后端 Prometheus 增加的 label；
+	[ honorLabels: bool | default = false ]
+	*/
 	if honor {
 		for _, l := range target.Labels() {
 			if !lset.Has(l.Name) {
@@ -566,7 +572,7 @@ func mutateSampleLabels(lset labels.Labels, target *Target, honor bool, rc []*re
 	}
 
 	res := lb.Labels()
-
+	// relabel_metrics处理
 	if len(rc) > 0 {
 		res = relabel.Process(res, rc...)
 	}
@@ -1082,6 +1088,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	b := sl.buffers.Get(sl.lastScrapeSize).([]byte)
 	defer sl.buffers.Put(b)
+	//从一个[]byte切片，构造一个Buffer
 	buf := bytes.NewBuffer(b)
 
 	var total, added, seriesAdded int
@@ -1307,6 +1314,12 @@ loop:
 
 		t := defTime
 		met, tp, v := p.Series()
+		/**
+		是否使用抓取到 target 上产生的时间。
+		true: 如果 target 中有时间，使用 target 上的时间；
+		false: 直接忽略 target 上的时间；
+		[ honorTimestamps: bool | default = true ]
+		*/
 		if !sl.honorTimestamps {
 			tp = nil
 		}

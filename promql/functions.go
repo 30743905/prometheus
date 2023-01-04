@@ -73,6 +73,11 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 
 	resultValue := samples.Points[len(samples.Points)-1].V - samples.Points[0].V
 	if isCounter {
+		/**
+		由于counter存在reset的可能性，因此可能会出现0, 10, 5, ...这样的序列，
+		Prometheus认为从0到5实际的增值为10 + 5 = 15，而非5。
+		这里的代码逻辑相当于将10累计到了couterCorrection中，最后补偿到总增值中。
+		*/
 		var lastValue float64
 		for _, sample := range samples.Points {
 			if sample.V < lastValue {
@@ -83,10 +88,14 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 	}
 
 	// Duration between first/last samples and boundary of range.
+	// 采样序列与用户请求的区间边界的距离。
+	// durationToStart表示第一个采样点到区间头部的距离。
+	// durationToEnd表示最后一个采样点到区间尾部的距离
 	durationToStart := float64(samples.Points[0].T-rangeStart) / 1000
 	durationToEnd := float64(rangeEnd-samples.Points[len(samples.Points)-1].T) / 1000
-
+	// 采样序列的总时长。
 	sampledInterval := float64(samples.Points[len(samples.Points)-1].T-samples.Points[0].T) / 1000
+	// 采样序列的平均采样间隔，一般等于scrape interval。
 	averageDurationBetweenSamples := sampledInterval / float64(len(samples.Points)-1)
 
 	if isCounter && resultValue > 0 && samples.Points[0].V >= 0 {
@@ -97,6 +106,8 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 		// take the zero point as the start of the series,
 		// thereby avoiding extrapolation to negative counter
 		// values.
+		// 由于counter不能为负数，这里对零点位置作一个线性估计，
+		// 确保durationToStart不会超过durationToZero。
 		durationToZero := sampledInterval * (samples.Points[0].V / resultValue)
 		if durationToZero < durationToStart {
 			durationToStart = durationToZero
@@ -107,9 +118,12 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 	// extrapolate the result. This is as we expect that another sample
 	// will exist given the spacing between samples we've seen thus far,
 	// with an allowance for noise.
+	// *************** extrapolation核心部分 *****************
+	// 将平均sample间隔乘以1.1作为extrapolation的判断间隔。
 	extrapolationThreshold := averageDurationBetweenSamples * 1.1
 	extrapolateToInterval := sampledInterval
-
+	// 如果采样序列与用户请求的区间在头部的距离不超过阈值的话，直接补齐；
+	// 如果超过阈值的话，只补齐一般的平均采样间隔。这里解决了上述的速率爆炸问题。
 	if durationToStart < extrapolationThreshold {
 		extrapolateToInterval += durationToStart
 	} else {
@@ -120,7 +134,9 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 	} else {
 		extrapolateToInterval += averageDurationBetweenSamples / 2
 	}
+	// 对增值进行等比放大。
 	resultValue = resultValue * (extrapolateToInterval / sampledInterval)
+	// 如果是求解rate，除以总的时长。
 	if isRate {
 		resultValue = resultValue / ms.Range.Seconds()
 	}

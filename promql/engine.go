@@ -462,12 +462,14 @@ func (ng *Engine) newTestQuery(f func(context.Context) error) Query {
 // At this point per query only one EvalStmt is evaluated. Alert and record
 // statements are not handled by the Engine.
 func (ng *Engine) exec(ctx context.Context, q *query) (v parser.Value, ws storage.Warnings, err error) {
+	// prometheus_engine_queries 计数器，表示当前query个数
 	ng.metrics.currentQueries.Inc()
 	defer ng.metrics.currentQueries.Dec()
 
 	ctx, cancel := context.WithTimeout(ctx, ng.timeout)
 	q.cancel = cancel
 
+	// 收尾函数，记录日志或者jager
 	defer func() {
 		ng.queryLoggerLock.RLock()
 		if l := ng.queryLogger; l != nil {
@@ -501,10 +503,13 @@ func (ng *Engine) exec(ctx context.Context, q *query) (v parser.Value, ws storag
 		}
 		ng.queryLoggerLock.RUnlock()
 	}()
-
+	// execTotalTime 代表exec函数执行全部耗时不算log
 	execSpanTimer, ctx := q.stats.GetSpanTimer(ctx, stats.ExecTotalTime)
 	defer execSpanTimer.Finish()
 
+	// ExecQueueTime代表队列中等待时间
+	// 命令行参数query.max-concurrency
+	// 如果日志中这个耗时高，考虑队列被慢查询占满了。对应在data目录下的queries.active文件
 	queueSpanTimer, _ := q.stats.GetSpanTimer(ctx, stats.ExecQueueTime, ng.metrics.queryQueueTime)
 	// Log query in active log. The active log guarantees that we don't run over
 	// MaxConcurrent queries.
@@ -522,7 +527,7 @@ func (ng *Engine) exec(ctx context.Context, q *query) (v parser.Value, ws storag
 	defer q.cancel()
 
 	const env = "query execution"
-
+	// EvalTotalTime代表execEvalStmt函数执行时间
 	evalSpanTimer, ctx := q.stats.GetSpanTimer(ctx, stats.EvalTotalTime)
 	defer evalSpanTimer.Finish()
 
@@ -551,6 +556,7 @@ func durationMilliseconds(d time.Duration) int64 {
 
 // execEvalStmt evaluates the expression of an evaluation statement for the given time range.
 func (ng *Engine) execEvalStmt(ctx context.Context, query *query, s *parser.EvalStmt) (parser.Value, storage.Warnings, error) {
+	// QueryPreparationTime代表准备存储上的querier+select series时间
 	prepareSpanTimer, ctxPrepare := query.stats.GetSpanTimer(ctx, stats.QueryPreparationTime, ng.metrics.queryPrepareTime)
 	mint, maxt := ng.findMinMaxTime(s)
 	querier, err := query.queryable.Querier(ctxPrepare, mint, maxt)
@@ -559,13 +565,15 @@ func (ng *Engine) execEvalStmt(ctx context.Context, query *query, s *parser.Eval
 		return nil, nil, err
 	}
 	defer querier.Close()
-
+	// populateSeries调用 select返回series
 	ng.populateSeries(querier, s)
 	prepareSpanTimer.Finish()
 
 	// Modify the offset of vector and matrix selectors for the @ modifier
 	// w.r.t. the start time since only 1 evaluation will be done on them.
 	setOffsetForAtModifier(timeMilliseconds(s.Start), s.Expr)
+	// InnerEvalTime代表从存储拿到series后在本地内存中执行 evaluator.Eval(s.Expr)的时间
+	// evaluator.Eval需要判断instance_query 还是range_query
 	evalSpanTimer, ctxInnerEval := query.stats.GetSpanTimer(ctx, stats.InnerEvalTime, ng.metrics.queryInnerEval)
 	// Instant evaluation. This is executed as a range evaluation with one step.
 	if s.Start == s.End && s.Interval == 0 {
@@ -647,6 +655,7 @@ func (ng *Engine) execEvalStmt(ctx context.Context, query *query, s *parser.Eval
 	}
 
 	// TODO(fabxc): where to ensure metric labels are a copy from the storage internals.
+	// ResultSortTime代表排序耗时
 	sortSpanTimer, _ := query.stats.GetSpanTimer(ctx, stats.ResultSortTime, ng.metrics.queryResultSort)
 	sort.Sort(mat)
 	sortSpanTimer.Finish()
