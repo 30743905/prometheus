@@ -54,6 +54,15 @@ func TestMain(m *testing.M) {
 	exitCode := m.Run()
 	os.RemoveAll(promData)
 	os.Exit(exitCode)
+
+	/*var cfs = discovery.Configs{}
+	var cf = discovery.Config{}
+	sc := config.ScrapeConfig{
+		ServiceDiscoveryConfigs: ,
+	}
+	fmt.Println(sc)
+	*/
+
 }
 
 func TestComputeExternalURL(t *testing.T) {

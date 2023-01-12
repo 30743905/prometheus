@@ -44,11 +44,50 @@ func TestDeriv(t *testing.T) {
 
 	metric := labels.FromStrings("__name__", "foo")
 	a.Append(0, metric, 1493712816939, 1.0)
-	a.Append(0, metric, 1493712846939, 1.0)
+	a.Append(0, metric, 1493712846939, 7.5)
 
 	require.NoError(t, a.Commit())
 
 	query, err := engine.NewInstantQuery(storage, "deriv(foo[30m])", timestamp.Time(1493712846939))
+	require.NoError(t, err)
+
+	result := query.Exec(context.Background())
+	require.NoError(t, result.Err)
+
+	vec, _ := result.Vector()
+	require.Equal(t, 1, len(vec), "Expected 1 result, got %d", len(vec))
+	require.Equal(t, 0.0, vec[0].V, "Expected 0.0 as value, got %f", vec[0].V)
+}
+
+func TestIncrease(t *testing.T) {
+	// https://github.com/prometheus/prometheus/issues/2674#issuecomment-315439393
+	// This requires more precision than the usual test system offers,
+	// so we test it by hand.
+	storage := teststorage.New(t)
+	defer storage.Close()
+	opts := EngineOpts{
+		Logger:     nil,
+		Reg:        nil,
+		MaxSamples: 10000,
+		Timeout:    100 * time.Second,
+	}
+	engine := NewEngine(opts)
+
+	a := storage.Appender(context.Background())
+
+	metric := labels.FromStrings("__name__", "foo")
+	a.Append(0, metric, 1493712816939, 1.0) //2017-05-02 16:13:36
+	a.Append(0, metric, 1493712846939, 3)   //2017-05-02 16:14:06
+	a.Append(0, metric, 1493712876939, 5)
+	a.Append(0, metric, 1493712906939, 2)
+	a.Append(0, metric, 1493712936939, 4)
+	a.Append(0, metric, 1493712966939, 1)
+	a.Append(0, metric, 1493712996939, 2)
+
+	require.NoError(t, a.Commit())
+
+	//query, err := engine.NewInstantQuery(storage, "deriv(foo[30m])", timestamp.Time(1493712846939))
+	query, err := engine.NewInstantQuery(storage, "max(foo)", timestamp.Time(1493712996939))
 	require.NoError(t, err)
 
 	result := query.Exec(context.Background())

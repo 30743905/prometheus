@@ -152,27 +152,50 @@ func (m *Manager) SyncCh() <-chan map[string][]*targetgroup.Group {
 }
 
 // ApplyConfig removes all running discovery providers and starts new ones using the provided config.
+//入参是map类型，key是job名称，value是Configs是Config类型切片，Config则对应的一种服务发现协议
 func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
+	//加锁
 	m.mtx.Lock()
+	//函数执行完后解锁
 	defer m.mtx.Unlock()
-
+	//遍历已存在的target
 	for pk := range m.targets {
+		/**
+		如果已存在的target在配置中已不存在对应的job配置，则移除该job对应的prometheus_sd_discovered_targets指标
+		prometheus_sd_discovered_targets{config="prometheus", name="scrape"}:config标签指定job，name指定告警服务发现或抓取服务发现
+		*/
 		if _, ok := cfg[pk.setName]; !ok {
+			// 删除带有指定标签和标签值的向量指标.如果删除了指标,返回 true
 			discoveredTargets.DeleteLabelValues(m.name, pk.setName)
 		}
 	}
+
+	/**
+	取消所有Discoverer：
+		当前运行的服务发现Discoverer是基于之前配置，现在需要重新加载新配置，所以取消所有现在运行的Discoverer
+	*/
 	m.cancelDiscoverers()
+	//m.targets存储之前服务发现的所有采集点target，重新创建map则清空之前target
 	m.targets = make(map[poolKey]map[string]*targetgroup.Group)
+	//清空manager之前创建的provider，基于新配置重新生成
 	m.providers = nil
+	//清空manager的discoverCancel，因为上步骤已经停止所有discoverer，这个就没有用处了
 	m.discoverCancel = nil
 
 	failedCount := 0
 	for name, scfg := range cfg {
+		/**
+		注册provider：
+			基于Config创建Discoverer，然后封装到provider中，并将provider存放到manager的providers切片中
+		*/
 		failedCount += m.registerProviders(scfg, name)
+		//prometheus_sd_discovered_targets值设置0：重置
 		discoveredTargets.WithLabelValues(m.name, name).Set(0)
 	}
+	//provider注册失败数量
 	failedConfigs.WithLabelValues(m.name).Set(float64(failedCount))
 
+	//遍历provider列表，并启动provider
 	for _, prov := range m.providers {
 		m.startProvider(m.ctx, prov)
 	}
@@ -209,6 +232,7 @@ func (m *Manager) updater(ctx context.Context, p *provider, updates chan []*targ
 			return
 		case tgs, ok := <-updates:
 			receivedUpdates.WithLabelValues(m.name).Inc()
+			fmt.Println("-------->>>", tgs)
 			if !ok {
 				level.Debug(m.logger).Log("msg", "Discoverer channel closed", "provider", p.name)
 				return
@@ -293,6 +317,10 @@ func (m *Manager) allGroups() map[string][]*targetgroup.Group {
 }
 
 // registerProviders returns a number of failed SD config.
+/**
+1、每个job下的每种服务发现协议会被注册一个provider
+2、provider内部其实包装Discoverer
+*/
 func (m *Manager) registerProviders(cfgs Configs, setName string) int {
 	var (
 		failed int
@@ -301,25 +329,46 @@ func (m *Manager) registerProviders(cfgs Configs, setName string) int {
 	add := func(cfg Config) {
 		for _, p := range m.providers {
 			if reflect.DeepEqual(cfg, p.config) {
+				//如果不同job下Config存在相等清空，则不会重复创建provider，而是在原有provider下的subs中添加对应的job名称即可
 				p.subs = append(p.subs, setName)
 				added = true
 				return
 			}
 		}
+		//服务发现类型
 		typ := cfg.Name()
+
+		/**
+		创建Discoverer：
+		1、Config是一个接口类型，主要包含两个方法：
+			Name() string
+			NewDiscoverer(DiscovererOptions) (Discoverer, error)
+		2、不同的服务发现协议实现的Config则NewDiscoverer()方法实现不一样
+		3、NewDiscoverer()函数返回Discoverer，其也是一个接口类型：
+			type Discoverer interface {
+				Run(ctx context.Context, up chan<- []*targetgroup.Group)
+			}
+		4、Discoverer就是具体分服务发现实现逻辑，调用Run方法就是启动该服务发现，其有两个入参：
+			ctx：用于控制停止该Discoverer
+			up：channel类型，服务发现的target通过该通道传递给目标
+		*/
 		d, err := cfg.NewDiscoverer(DiscovererOptions{
 			Logger: log.With(m.logger, "discovery", typ),
 		})
 		if err != nil {
 			level.Error(m.logger).Log("msg", "Cannot create service discovery", "err", err, "type", typ)
+			//Discoverer创建失败，则failed累加+1
 			failed++
 			return
 		}
+		//将Discoverer封装成provider，并存放到manager中providers切片中
+		//provider将Discoverer，及其生成该provider的Config，以及该Config的job列表封装
 		m.providers = append(m.providers, &provider{
+			//provider名称，typ是服务发现类型，len(m.providers)是provider序号
 			name:   fmt.Sprintf("%s/%d", typ, len(m.providers)),
-			d:      d,
-			config: cfg,
-			subs:   []string{setName},
+			d:      d,                 //Discoverer
+			config: cfg,               //生成该provider的Config
+			subs:   []string{setName}, //job名称，注意这里是切片类型，如果不同job下Config存在相等清空，则不会重复创建provider，而是在原有provider下的subs中添加对应的job名称即可
 		})
 		added = true
 	}
@@ -327,6 +376,7 @@ func (m *Manager) registerProviders(cfgs Configs, setName string) int {
 		add(cfg)
 	}
 	if !added {
+		//added=false，则表示没有一个provider注册成功
 		// Add an empty target group to force the refresh of the corresponding
 		// scrape pool and to notify the receiver that this target set has no
 		// current targets.

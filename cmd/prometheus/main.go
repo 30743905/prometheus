@@ -136,12 +136,15 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 		opts := strings.Split(f, ",")
 		for _, o := range opts {
 			switch o {
+			// @timestamp 支持
 			case "promql-at-modifier":
 				c.enablePromQLAtModifier = true
 				level.Info(logger).Log("msg", "Experimental promql-at-modifier enabled")
+				// offset负偏移量 支持
 			case "promql-negative-offset":
 				c.enablePromQLNegativeOffset = true
 				level.Info(logger).Log("msg", "Experimental promql-negative-offset enabled")
+				//
 			case "remote-write-receiver":
 				c.web.RemoteWriteReceiver = true
 				level.Info(logger).Log("msg", "Experimental remote-write-receiver enabled")
@@ -160,7 +163,14 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 
 func main() {
 	if os.Getenv("DEBUG") != "" {
+		/**
+		阻塞概要采样
+		runtime.SetBlockProfileRate(rate int)设置阻塞概要信息采样的频率，这个参数的含义是如果一个阻塞事件的持续时间达到了多少纳秒，就对其进行采样。这个参数的值小于或等于0时，则停止对阻塞采样
+		*/
 		runtime.SetBlockProfileRate(20)
+		/**
+		Mutex事件采样
+		*/
 		runtime.SetMutexProfileFraction(20)
 	}
 
@@ -182,6 +192,7 @@ func main() {
 
 	a := kingpin.New(filepath.Base(os.Args[0]), "The Prometheus monitoring server").UsageWriter(os.Stdout)
 
+	// prometheus --version输出
 	a.Version(version.Print("prometheus"))
 
 	a.HelpFlag.Short('h')
@@ -312,6 +323,7 @@ func main() {
 
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
 
+	// 解析参数
 	_, err := a.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
@@ -321,6 +333,7 @@ func main() {
 
 	logger := promlog.New(&cfg.promlogConfig)
 
+	// feature 设置
 	if err := cfg.setFeatureListOptions(logger); err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing feature list"))
 		os.Exit(1)
@@ -375,12 +388,18 @@ func main() {
 			cfg.tsdb.RetentionDuration = newFlagRetentionDuration
 		}
 
+		/**
+		 --storage.tsdb.retention（旧）、--storage.tsdb.retention.time：最大存储时长
+		 --storage.tsdb.retention.size：最大存储空间
+		如果存储时长和存储空间都未设置，则采用默认15天存储时长
+		*/
 		if cfg.tsdb.RetentionDuration == 0 && cfg.tsdb.MaxBytes == 0 {
 			cfg.tsdb.RetentionDuration = defaultRetentionDuration
 			level.Info(logger).Log("msg", "No time or size retention was set so using the default time retention", "duration", defaultRetentionDuration)
 		}
 
 		// Check for overflows. This limits our max retention to 100y.
+		// 存储时长过大溢出导致为负数，则设置100年
 		if cfg.tsdb.RetentionDuration < 0 {
 			y, err := model.ParseDuration("100y")
 			if err != nil {
@@ -550,7 +569,12 @@ func main() {
 			name: "scrape_sd",
 			reloader: func(cfg *config.Config) error {
 				c := make(map[string]discovery.Configs)
+				/**
+				ScrapeConfigs  []*ScrapeConfig
+				每个job配置对应一个ScrapeConfig
+				*/
 				for _, v := range cfg.ScrapeConfigs {
+					// v.ServiceDiscoveryConfigs：job下配置的服务发现协议，一个job可能配置多个服务发现协议，这里是切片
 					c[v.JobName] = v.ServiceDiscoveryConfigs
 				}
 				return discoveryManagerScrape.ApplyConfig(c)
@@ -719,6 +743,11 @@ func main() {
 				<-reloadReady.C
 
 				for {
+					/**
+					Prometheus支持两种方式配置热更新：
+						1、kill -HUP pid
+						2、curl -X POST http://IP/-/reload
+					*/
 					select {
 					case <-hup:
 						if err := reloadConfig(cfg.configFile, logger, noStepSubqueryInterval, reloaders...); err != nil {
@@ -951,7 +980,7 @@ func reloadConfig(filename string, logger log.Logger, noStepSuqueryInterval *saf
 			configSuccess.Set(0)
 		}
 	}()
-
+	//加载配置
 	conf, err := config.LoadFile(filename)
 	if err != nil {
 		return errors.Wrapf(err, "couldn't load configuration (--config.file=%q)", filename)
@@ -969,9 +998,10 @@ func reloadConfig(filename string, logger log.Logger, noStepSuqueryInterval *saf
 	if failed {
 		return errors.Errorf("one or more errors occurred while applying the new configuration (--config.file=%q)", filename)
 	}
-
+	// Rule规则计算间隔
 	noStepSuqueryInterval.Set(conf.GlobalConfig.EvaluationInterval)
 	l := []interface{}{"msg", "Completed loading of configuration file", "filename", filename, "totalDuration", time.Since(start)}
+	// ts=2023-01-10T16:26:48.858Z caller=main.go:1218 level=info msg="Completed loading of configuration file" filename=prometheus.yml totalDuration=1.133003ms db_storage=1.549µs remote_storage=5.803µs web_handler=608ns query_engine=3.08µs scrape=312.203µs scrape_sd=70.13µs notify=41.584µs notify_sd=10.037µs rules=5.426µs tracing=17.299µs
 	level.Info(logger).Log(append(l, timings...)...)
 	return nil
 }
