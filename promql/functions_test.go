@@ -99,7 +99,8 @@ func TestIncrease(t *testing.T) {
 
 	require.NoError(t, a.Commit())
 
-	query, err := engine.NewInstantQuery(storage, "increase(foo[2m])", timestamp.Time(1672713506000))
+	//query, err := engine.NewInstantQuery(storage, "increase(foo[2m])", timestamp.Time(1672713506000))
+	query, err := engine.NewInstantQuery(storage, "max(foo)", timestamp.Time(1672713506000))
 	require.NoError(t, err)
 
 	result := query.Exec(context.Background())

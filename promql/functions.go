@@ -60,7 +60,8 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 	ms := args[0].(*parser.MatrixSelector)
 	vs := ms.VectorSelector.(*parser.VectorSelector)
 	var (
-		samples    = vals[0].(Matrix)[0]
+		samples = vals[0].(Matrix)[0]
+		//计算起始范围
 		rangeStart = enh.Ts - durationMilliseconds(ms.Range+vs.Offset)
 		rangeEnd   = enh.Ts - durationMilliseconds(vs.Offset)
 	)
@@ -70,7 +71,7 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 	if len(samples.Points) < 2 {
 		return enh.Out
 	}
-
+	//最后一个样本和第一个样本差值
 	resultValue := samples.Points[len(samples.Points)-1].V - samples.Points[0].V
 	if isCounter {
 		/**
@@ -120,6 +121,7 @@ func extrapolatedRate(vals []parser.Value, args parser.Expressions, enh *EvalNod
 	// with an allowance for noise.
 	// *************** extrapolation核心部分 *****************
 	// 将平均sample间隔乘以1.1作为extrapolation的判断间隔。
+	// 噪音处理，因为点集合的区间实际上小于时间区间，两边有一段空白，因此这里 *1.1 来扩大了一下点集合的区间范围
 	extrapolationThreshold := averageDurationBetweenSamples * 1.1
 	extrapolateToInterval := sampledInterval
 	// 如果采样序列与用户请求的区间在头部的距离不超过阈值的话，直接补齐；
@@ -175,22 +177,27 @@ func instantValue(vals []parser.Value, out Vector, isRate bool) Vector {
 	samples := vals[0].(Matrix)[0]
 	// No sense in trying to compute a rate without at least two points. Drop
 	// this Vector element.
+	// 至少两个样本点，否则返回空
 	if len(samples.Points) < 2 {
 		return out
 	}
-
+	//获取最后两个样本点
 	lastSample := samples.Points[len(samples.Points)-1]
 	previousSample := samples.Points[len(samples.Points)-2]
 
 	var resultValue float64
+	// irate函数，这里防止counter类型被重置
 	if isRate && lastSample.V < previousSample.V {
 		// Counter reset.
+		//判断counter类型被重置，则直接返回最后一个值
 		resultValue = lastSample.V
 	} else {
+		//否则返回最后两个样本点差值
 		resultValue = lastSample.V - previousSample.V
 	}
 
 	sampledInterval := lastSample.T - previousSample.T
+	//时间间隔0，则直接返回空值
 	if sampledInterval == 0 {
 		// Avoid dividing by 0.
 		return out
