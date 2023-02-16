@@ -653,6 +653,9 @@ var userAgentHeader = fmt.Sprintf("Prometheus/%s", version.Version)
 
 func (s *targetScraper) scrape(ctx context.Context, w io.Writer) (string, error) {
 	if s.req == nil {
+		/**
+		s.URL()：根据Target构建请求url
+		*/
 		req, err := http.NewRequest("GET", s.URL().String(), nil)
 		if err != nil {
 			return "", err
@@ -717,9 +720,9 @@ type loop interface {
 }
 
 type cacheEntry struct {
-	ref      uint64
-	lastIter uint64
-	hash     uint64
+	ref      uint64 //添加到本地数据库或者远程数据库的一个返回值:
+	lastIter uint64 //上一个版本号
+	hash     uint64 // hash值
 	lset     labels.Labels
 }
 
@@ -749,7 +752,13 @@ type scrapeLoop struct {
 // scrapeCache tracks mappings of exposed metric strings to label sets and
 // storage references. Additionally, it tracks staleness of series between
 // scrapes.
+/**
+append方法利用scrapeCache的以上几个方法, 可实现对指标(metircs)的合法性验证,过滤及存储，其中,存储路径分两条
+	(1) 如果能够在scrapeCache中找到该metric的cacheEntry, 说明之前添加过,则做AddFast存储路径
+	(2) 如果在scrapeCache中不能找到该metric的cacheEntry, 需要生成指标的lables,hash及ref等,通过Add方法jinxing存储, 然后把该指标(metric)的cacheEntry加到scrapeCache中.
+*/
 type scrapeCache struct {
+	//被缓存的迭代次数
 	iter uint64 // Current scrape iteration.
 
 	// How many series and metadata entries there were at the last success.
@@ -757,20 +766,26 @@ type scrapeCache struct {
 
 	// Parsed string to an entry with information about the actual label set
 	// and its storage reference.
+	//map类型,key是metric,value是cacheEntry结构体
 	series map[string]*cacheEntry
 
 	// Cache of dropped metric strings and their iteration. The iteration must
 	// be a pointer so we can update it without setting a new entry with an unsafe
 	// string in addDropped().
+	//缓存不合法指标(metrics)
 	droppedSeries map[string]*uint64
 
 	// seriesCur and seriesPrev store the labels of series that were seen
 	// in the current and previous scrape.
 	// We hold two maps and swap them out to save allocations.
-	seriesCur  map[uint64]labels.Labels
+	//缓存本次scrape的指标(metrics)
+	seriesCur map[uint64]labels.Labels
+	//缓存上次scrape的指标(metrics)
 	seriesPrev map[uint64]labels.Labels
 
-	metaMtx  sync.Mutex
+	//同步锁
+	metaMtx sync.Mutex
+	//元数据
 	metadata map[string]*metaEntry
 }
 
@@ -797,6 +812,7 @@ func newScrapeCache() *scrapeCache {
 	}
 }
 
+//整理scrapeCache结构体中包含的几个map类型的缓存
 func (c *scrapeCache) iterDone(flushCache bool) {
 	c.metaMtx.Lock()
 	count := len(c.series) + len(c.droppedSeries) + len(c.metadata)
@@ -829,6 +845,8 @@ func (c *scrapeCache) iterDone(flushCache bool) {
 			}
 		}
 		c.metaMtx.Lock()
+
+		// 保留最近十个版本的metadata
 		for m, e := range c.metadata {
 			// Keep metadata around for 10 scrapes after its metric disappeared.
 			if c.iter-e.lastIter > 10 {
@@ -837,18 +855,24 @@ func (c *scrapeCache) iterDone(flushCache bool) {
 		}
 		c.metaMtx.Unlock()
 
+		//迭代版本号自增
 		c.iter++
 	}
 
 	// Swap current and previous series.
+	// 把上次采集的指标(metircs)集合和本次采集的指标集(metrics)互换
 	c.seriesPrev, c.seriesCur = c.seriesCur, c.seriesPrev
 
 	// We have to delete every single key in the map.
+	// 删除本地获取的指标集(metrics)
 	for k := range c.seriesCur {
 		delete(c.seriesCur, k)
 	}
 }
 
+/**
+根据指标(metrics)信息获取结构体cacheEntry
+*/
 func (c *scrapeCache) get(met string) (*cacheEntry, bool) {
 	e, ok := c.series[met]
 	if !ok {
@@ -858,19 +882,24 @@ func (c *scrapeCache) get(met string) (*cacheEntry, bool) {
 	return e, true
 }
 
+//根据指标(metircs)信息添加该meitric的结构体cacheEntry
 func (c *scrapeCache) addRef(met string, ref uint64, lset labels.Labels, hash uint64) {
 	if ref == 0 {
 		return
 	}
+	// series是map类型, key为metric, value是结构体cacheEntry
 	c.series[met] = &cacheEntry{ref: ref, lastIter: c.iter, lset: lset, hash: hash}
 }
 
+//添加无效指标(metrics)到map类型droppedSeries
 func (c *scrapeCache) addDropped(met string) {
 	iter := c.iter
+	// droppedSeries是map类型,以metric作为key, 版本作为value
 	c.droppedSeries[met] = &iter
 }
 
 func (c *scrapeCache) getDropped(met string) bool {
+	// 判断metric是否在非法的dropperSeries的map类型里, key是metric, value是迭代版本号
 	iterp, ok := c.droppedSeries[met]
 	if ok {
 		*iterp = c.iter
@@ -878,12 +907,15 @@ func (c *scrapeCache) getDropped(met string) bool {
 	return ok
 }
 
+//添加不带时间戳的指标(metrics)到map类型seriesCur,以metric lset的hash值作为唯一标识
 func (c *scrapeCache) trackStaleness(hash uint64, lset labels.Labels) {
 	c.seriesCur[hash] = lset
 }
 
+// 比较两个map：seriesCur和seriesPrev，查找过期指标
 func (c *scrapeCache) forEachStale(f func(labels.Labels) bool) {
 	for h, lset := range c.seriesPrev {
+		// 判断之前的metric是否在当前的seriesCur里.
 		if _, ok := c.seriesCur[h]; !ok {
 			if !f(lset) {
 				break
@@ -1063,6 +1095,7 @@ mainLoop:
 		if AlignScrapeTimestamps && interval > 100*scrapeTimestampTolerance {
 			// For some reason, a tick might have been skipped, in which case we
 			// would call alignedScrapeTime.Add(interval) multiple times.
+			//由于某些原因，可能某次循环被跳过，这里要重新校正alignedScrapeTime时间
 			for scrapeTime.Sub(alignedScrapeTime) >= interval {
 				alignedScrapeTime = alignedScrapeTime.Add(interval)
 			}
@@ -1101,6 +1134,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	// Only record after the first scrape.
 	if !last.IsZero() {
+		//非第一次调用，生成prometheus_target_interval_length_seconds指标：两次scrape实际间隔
 		targetIntervalLength.WithLabelValues(interval.String()).Observe(
 			time.Since(last).Seconds(),
 		)
@@ -1149,6 +1183,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	var contentType string
 	scrapeCtx, cancel := context.WithTimeout(sl.parentCtx, timeout)
+	//抓取指标
 	contentType, scrapeErr = sl.scraper.scrape(scrapeCtx, buf)
 	cancel()
 
@@ -1288,7 +1323,8 @@ type appendErrors struct {
 
 func (sl *scrapeLoop) append(app storage.Appender, b []byte, contentType string, ts time.Time) (total, added, seriesAdded int, err error) {
 	var (
-		p              = textparse.New(b, contentType)
+		//根据contentType创建解析器
+		p              = textparse.New(b, contentType) // 创建指标(metrics)解析器,其中b包含所有一个target的所有指标(metrics)
 		defTime        = timestamp.FromTime(ts)
 		appErrs        = appendErrors{}
 		sampleLimitErr error
@@ -1310,10 +1346,12 @@ loop:
 			sampleAdded bool
 			e           exemplar.Exemplar
 		)
+
 		if et, err = p.Next(); err != nil {
 			if err == io.EOF {
 				err = nil
 			}
+			// 退出的条件是该target获取的所有指标(metrics)存储结束
 			break
 		}
 		switch et {
@@ -1333,9 +1371,10 @@ loop:
 		total++
 
 		t := defTime
+		//获取一个指标(metric)的信息:时序、时间戳、值
 		met, tp, v := p.Series()
 		/**
-		是否使用抓取到 target 上产生的时间。
+		honorTimestamps：是否使用抓取到 target 上产生的时间。
 		true: 如果 target 中有时间，使用 target 上的时间；
 		false: 直接忽略 target 上的时间；
 		[ honorTimestamps: bool | default = true ]
@@ -1346,10 +1385,11 @@ loop:
 		if tp != nil {
 			t = *tp
 		}
-
+		// 判断指标(metric)是否合法
 		if sl.cache.getDropped(yoloString(met)) {
 			continue
 		}
+		// 根据指标(metric)判断是否在scrapeCache中存在该指标的cacheEntry
 		ce, ok := sl.cache.get(yoloString(met))
 		var (
 			ref  uint64
@@ -1359,29 +1399,40 @@ loop:
 		)
 
 		if ok {
+			//cache存在，则直接使用cache中的seriesID和标签集lset
 			ref = ce.ref
 			lset = ce.lset
 		} else {
+			//cache不存在，则解析
+			//解析series -> lset标签集
+			// 若不存在, 把指标(metric)格式从ASCII转换labels字典:先把ASCII转换成字串川,然后把字符串分割成label的name和value,具体的不再细讲
 			mets = p.Metric(&lset)
+			// 对指标(metirc)的labels做hash值:先在每个label的key和value后面分别加上255,然后根据golang的库函数xxhash,计算hash值
 			hash = lset.Hash()
 
 			// Hash label set as it is seen local to the target. Then add target labels
 			// and relabeling and store the final label set.
+			// 会调用mutateSampleLabels方法(scrape/scrape.go:567)
+			// 根据sp.config.HonorLabels和sp.config.MetricRelabelConfigs规则,对指标(metric)的lables进行重置
 			lset = sl.sampleMutator(lset)
 
 			// The label set may be set to nil to indicate dropping.
 			if lset == nil {
+				// 若重置后的labels为空,则把该指标(metirc)加到droppedSeries
+				//废弃series，添加到droppedSeries集合中，后续遇到该集合中series直接废弃掉，避免重复解析判断
 				sl.cache.addDropped(mets)
 				continue
 			}
 
 			if !lset.Has(labels.MetricName) {
+				//没有__name__标签，即指标名称
 				err = errNameLabelMandatory
 				break loop
 			}
 		}
-
+		//将sample存储起来
 		ref, err = app.Append(ref, lset, t, v)
+		// 错误处理
 		sampleAdded, err = sl.checkAddError(ce, met, tp, err, &sampleLimitErr, &appErrs)
 		if err != nil {
 			if err != storage.ErrNotFound {
@@ -1395,6 +1446,7 @@ loop:
 				// Bypass staleness logic if there is an explicit timestamp.
 				sl.cache.trackStaleness(hash, lset)
 			}
+			// 根据指标(metircs)信息添加该meitric的结构体cacheEntry
 			sl.cache.addRef(mets, ref, lset, hash)
 			if sampleAdded && sampleLimitErr == nil {
 				seriesAdded++
