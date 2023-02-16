@@ -415,6 +415,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 
 // Sync converts target groups into actual scrape targets and synchronizes
 // the currently running scraper with the resulting set and returns all scraped and dropped targets.
+//一个scrapePool代表一个抓取job
 func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	sp.mtx.Lock()
 	defer sp.mtx.Unlock()
@@ -424,11 +425,18 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	var all []*Target
 	sp.droppedTargets = []*Target{}
 	for _, tg := range tgs {
+		// targetgroup.Group转成采集点信息[]*Target
+		// 这里是经过relabel_configs处理后符合的采集点
 		targets, err := targetsFromGroup(tg, sp.config)
 		if err != nil {
 			level.Error(sp.logger).Log("msg", "creating targets failed", "err", err)
 			continue
 		}
+		//过滤出activeTargets和droppedTargets
+		//droppedTargets是不符合条件过滤掉的采集点，可以
+		// 查询activeTargets: /api/v1/targets?state=active
+		// 查询droppedTargets: /api/v1/targets?state=dropped
+		// 查询所有： /api/v1/targets?state=any
 		for _, t := range targets {
 			if t.Labels().Len() > 0 {
 				all = append(all, t)
@@ -464,6 +472,13 @@ func (sp *scrapePool) sync(targets []*Target) {
 	for _, t := range targets {
 		hash := t.hash()
 
+		/**
+		遍历所有采集点，uniqueLoops存储当前最新最新采集点，其中value=nil的则表示该采集点之前服务发现被发现过，也被启动，本轮就不需要特别操作，value不是nil的则需要启动：
+			1、采集点在sp.activeTargets中不存在，则需要加入到sp.activeTargets，并创建loop存放到sp.loops中，同时采集点存放到uniqueLoops
+			2、采集点在sp.activeTargets中存在，这里又可能存在两种情况：
+				情况一：sp.activeTargets存在，但uniqueLoops[hash]不存在，则表示该采集点之前被服务发现过，并且已启动，未发生变化则不需要其它操作；
+				情况二：sp.activeTargets存在，uniqueLoops[hash]也存在，则表示重复的采集点，忽略即可
+		*/
 		if _, ok := sp.activeTargets[hash]; !ok {
 			s := &targetScraper{Target: t, client: sp.client, timeout: timeout}
 			l := sp.newLoop(scrapeLoopOptions{
@@ -482,6 +497,8 @@ func (sp *scrapePool) sync(targets []*Target) {
 		} else {
 			// This might be a duplicated target.
 			if _, ok := uniqueLoops[hash]; !ok {
+				//之前已存在采集点，未发生变化
+
 				uniqueLoops[hash] = nil
 			}
 			// Need to keep the most updated labels information
@@ -493,6 +510,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 	var wg sync.WaitGroup
 
 	// Stop and remove old targets and scraper loops.
+	//遍历sp.activeTargets，如果uniqueLoops不存在，则表示旧的采集点，当前服务发现中已消失，则需要停止剔除采集点
 	for hash := range sp.activeTargets {
 		if _, ok := uniqueLoops[hash]; !ok {
 			wg.Add(1)
@@ -513,6 +531,8 @@ func (sp *scrapePool) sync(targets []*Target) {
 	for _, l := range sp.loops {
 		l.setForcedError(forcedErr)
 	}
+	//遍历uniqueLoops，启动loop开始抓取采集点指标
+	//uniqueLoops中value=nil则表示之前已被服务发现过，且已启动完成，未出现任何变化，这种则不需要再次启动
 	for _, l := range uniqueLoops {
 		if l != nil {
 			go l.run(interval, timeout, nil)

@@ -180,14 +180,17 @@ func (m *Manager) reload() {
 		if _, ok := m.scrapePools[setName]; !ok {
 			scrapeConfig, ok := m.scrapeConfigs[setName]
 			if !ok {
+				//服务发现推送过来的新job，但是配置文件中没有，则异常，忽略当前job的目标采集点
 				level.Error(m.logger).Log("msg", "error reloading target set", "err", "invalid config id:"+setName)
 				continue
 			}
+			//创建scrapePool
 			sp, err := newScrapePool(scrapeConfig, m.append, m.jitterSeed, log.With(m.logger, "scrape_pool", setName))
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error creating new scrape pool", "err", err, "scrape_pool", setName)
 				continue
 			}
+			//将创建的scrapePoll存储到Manager中scrapePools这个Map集合中
 			m.scrapePools[setName] = sp
 		}
 
