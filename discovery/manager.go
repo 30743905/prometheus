@@ -232,7 +232,6 @@ func (m *Manager) updater(ctx context.Context, p *provider, updates chan []*targ
 			return
 		case tgs, ok := <-updates:
 			receivedUpdates.WithLabelValues(m.name).Inc()
-			fmt.Println("-------->>>", tgs)
 			if !ok {
 				level.Debug(m.logger).Log("msg", "Discoverer channel closed", "provider", p.name)
 				return
@@ -250,6 +249,31 @@ func (m *Manager) updater(ctx context.Context, p *provider, updates chan []*targ
 	}
 }
 
+/**
+  select实现非阻塞读写
+  select {
+    case <- chan1:
+    // 如果chan1成功读到数据，则进行该case处理语句
+    case chan2 <- 1:
+    // 如果成功向chan2写入数据，则进行该case处理语句
+    default:
+    // 如果上面都没有成功，则进入default处理流程
+
+使用规则
+1.如果没有default分支,select会阻塞在多个channel上，对多个channel的读/写事件进行监控。
+2.如果有一个或多个IO操作可以完成，则Go运行时系统会随机的选择一个执行，否则的话，如果有default分支，则执行default分支语句，如果连default都没有，则select语句会一直阻塞，直到至少有一个IO操作可以进行。
+
+注意：如果tsets是无缓冲channel，case ts := <-tsets:这里从channel取值要等case中逻辑处理完成，才能继续向channel写数据，
+因为ts := <-tsets从channel取出数据，但是当前协程还在处理数据，没法继续接收数据，而channel又是无缓冲的，导致没法继续写入数据
+
+for {
+		select {
+		case ts := <-tsets:
+			xxx
+		}
+	}
+
+*/
 func (m *Manager) sender() {
 	ticker := time.NewTicker(m.updatert)
 	defer ticker.Stop()

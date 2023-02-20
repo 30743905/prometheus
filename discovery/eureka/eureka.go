@@ -137,6 +137,7 @@ func NewDiscovery(conf *SDConfig, logger log.Logger) (*Discovery, error) {
 }
 
 func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
+	//通过Eureka REST API接口从eureka拉取元数据：http://ip:port/eureka/apps
 	apps, err := fetchApps(ctx, d.server, d.client)
 	if err != nil {
 		return nil, err
@@ -147,7 +148,9 @@ func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
 	}
 
 	for _, app := range apps.Applications {
+		//targetsForApp()方法将app下每个instance部分转成target
 		targets := targetsForApp(&app)
+		//解析的采集点合入一起
 		tg.Targets = append(tg.Targets, targets...)
 	}
 	return []*targetgroup.Group{tg}, nil
@@ -158,6 +161,7 @@ func targetsForApp(app *Application) []model.LabelSet {
 
 	// Gather info about the app's 'instances'. Each instance is considered a task.
 	for _, t := range app.Instances {
+		// __address__取值方式：instance.hostname和port，没有port则默认port=80
 		var targetAddress string
 		if t.Port != nil {
 			targetAddress = net.JoinHostPort(t.HostName, strconv.Itoa(t.Port.Port))
@@ -205,6 +209,7 @@ func targetsForApp(app *Application) []model.LabelSet {
 
 		if t.Metadata != nil {
 			for _, m := range t.Metadata.Items {
+				// prometheus label只支持[^a-zA-Z0-9_]字符，其它非法字符都会被替换成下划线_
 				ln := strutil.SanitizeLabelName(m.XMLName.Local)
 				target[model.LabelName(appInstanceMetadataPrefix+ln)] = lv(m.Content)
 			}

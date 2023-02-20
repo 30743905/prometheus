@@ -75,6 +75,9 @@ func NewPod(l log.Logger, pods cache.SharedInformer) *Pod {
 }
 
 func (p *Pod) enqueue(obj interface{}) {
+	// IndexerInformer使用一个增量队列，因此我们必须使用这个键函数进行删除
+	//obj是pod资源对象，通过DeletionHandlingMetaNamespaceKeyFunc将其转换成key
+	//比如key=test01/nginx-deployment-5ffc5bf56c-n2pl8，即namespace/pod_name格式
 	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 	if err != nil {
 		return
@@ -239,6 +242,7 @@ func (p *Pod) buildPod(pod *apiv1.Pod) *targetgroup.Group {
 			continue
 		}
 		// Otherwise create one target for each container/port combination.
+		//针对pod里的每个container上的每个port对应一个target定义
 		for _, port := range c.Ports {
 			ports := strconv.FormatUint(uint64(port.ContainerPort), 10)
 			addr := net.JoinHostPort(pod.Status.PodIP, ports)

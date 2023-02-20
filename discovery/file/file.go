@@ -241,6 +241,7 @@ func (d *Discovery) watchFiles() {
 
 // Run implements the Discoverer interface.
 func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
+	//fsnotify 能监控指定文件夹内文件的修改情况，如 文件的增加、删除、修改、重命名等操作
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		level.Error(d.logger).Log("msg", "Error adding file watcher", "err", err)
@@ -336,9 +337,11 @@ func (d *Discovery) refresh(ctx context.Context, ch chan<- []*targetgroup.Group)
 		fileSDScanDuration.Observe(time.Since(t0).Seconds())
 	}()
 	ref := map[string]int{}
+	//listFiles()根据file_sd_configs配置中files配置查找出所有符合的文件
 	for _, p := range d.listFiles() {
+		//readFile()读取文件内容，解析出[]*targetgroup.Group
 		tgroups, err := d.readFile(p)
-		if err != nil {
+		if err != nil { //如果出错，跳过当前文件继续处理下一个文件
 			fileSDReadErrorsCount.Inc()
 
 			level.Error(d.logger).Log("msg", "Error reading file", "path", p, "err", err)
@@ -347,6 +350,7 @@ func (d *Discovery) refresh(ctx context.Context, ch chan<- []*targetgroup.Group)
 			continue
 		}
 		select {
+		//将从文件中解析的[]*targetgroup.Group通过channel发送出去
 		case ch <- tgroups:
 		case <-ctx.Done():
 			return
@@ -355,13 +359,16 @@ func (d *Discovery) refresh(ctx context.Context, ch chan<- []*targetgroup.Group)
 		ref[p] = len(tgroups)
 	}
 	// Send empty updates for sources that disappeared.
+	//d.lastRefresh记录上次刷新的，ref记录当次刷新的，p是文件名
+	//上次刷新文件存在，但是当前刷新该文件没有，则该文件被删除，则发送空target集合过去覆盖掉之前的target数据
 	for f, n := range d.lastRefresh {
 		m, ok := ref[f]
-		if !ok || n > m {
+		if !ok || n > m { //文件被删，则发送空target
 			level.Debug(d.logger).Log("msg", "file_sd refresh found file that should be removed", "file", f)
 			d.deleteTimestamp(f)
 			for i := m; i < n; i++ {
 				select {
+				// 发送[]*targetgroup.Group，但是targets是空，覆盖掉之前
 				case ch <- []*targetgroup.Group{{Source: fileSource(f, i)}}:
 				case <-ctx.Done():
 					return
@@ -370,7 +377,7 @@ func (d *Discovery) refresh(ctx context.Context, ch chan<- []*targetgroup.Group)
 		}
 	}
 	d.lastRefresh = ref
-
+	//添加文件变更监听
 	d.watchFiles()
 }
 
@@ -413,7 +420,11 @@ func (d *Discovery) readFile(filename string) ([]*targetgroup.Group, error) {
 			err = errors.New("nil target group item found")
 			return nil, err
 		}
-
+		/**
+		当前targetgroup.Group来源标识，如：
+		D:\prometheus\prometheus-config\targets\t1.json:0
+		D:\prometheus\prometheus-config\targets\t1.json:1
+		*/
 		tg.Source = fileSource(filename, i)
 		if tg.Labels == nil {
 			tg.Labels = model.LabelSet{}

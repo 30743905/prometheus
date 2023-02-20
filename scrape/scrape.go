@@ -202,9 +202,11 @@ type scrapePool struct {
 	cancel     context.CancelFunc
 
 	// mtx must not be taken after targetMtx.
-	mtx            sync.Mutex
-	config         *config.ScrapeConfig
-	client         *http.Client
+	mtx sync.Mutex
+	//一个scrapePool对应一个job，config即为该job配置
+	config *config.ScrapeConfig
+	client *http.Client
+	//每个target都会生成一个loop
 	loops          map[uint64]loop
 	targetLimitHit bool // Internal state to speed up the target_limit checks.
 
@@ -424,15 +426,16 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	var all []*Target
 	sp.droppedTargets = []*Target{}
 	for _, tg := range tgs {
+		//基于targetgroup.Group构建target集合
 		targets, err := targetsFromGroup(tg, sp.config)
 		if err != nil {
 			level.Error(sp.logger).Log("msg", "creating targets failed", "err", err)
 			continue
 		}
 		for _, t := range targets {
-			if t.Labels().Len() > 0 {
+			if t.Labels().Len() > 0 { //relabel后符合要求的采集点
 				all = append(all, t)
-			} else if t.DiscoveredLabels().Len() > 0 {
+			} else if t.DiscoveredLabels().Len() > 0 { //relabel后不符合要求的采集点：废弃
 				sp.droppedTargets = append(sp.droppedTargets, t)
 			}
 		}
@@ -465,6 +468,9 @@ func (sp *scrapePool) sync(targets []*Target) {
 		hash := t.hash()
 
 		if _, ok := sp.activeTargets[hash]; !ok {
+			//生成targetScraper，其中封装了Target和client
+			//Target封装了采集点请求IP、端口、请求参数等信息，通过这些信息构建HTTP请求Request
+			//client是封装了认证信息的http请求客户端工具，用于将http请求request发送出去
 			s := &targetScraper{Target: t, client: sp.client, timeout: timeout}
 			l := sp.newLoop(scrapeLoopOptions{
 				target:          t,
@@ -603,6 +609,7 @@ func appender(app storage.Appender, limit int) storage.Appender {
 }
 
 // A scraper retrieves samples and accepts a status report at the end.
+// scraper接口时具体的执行单位，scrapeLoop也是调用scraper的方法来进行数据的抓取,
 type scraper interface {
 	scrape(ctx context.Context, w io.Writer) (string, error)
 	Report(start time.Time, dur time.Duration, err error)
@@ -697,6 +704,8 @@ type cacheEntry struct {
 	lset     labels.Labels
 }
 
+// loop是单个Target的执行单位，是一个接口
+// 该结构体实现 type loop interface
 type scrapeLoop struct {
 	scraper         scraper
 	l               log.Logger
@@ -1004,6 +1013,7 @@ func newScrapeLoop(ctx context.Context,
 
 func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	select {
+	//target被拉取前，先随机等待一个时间，然后再用interval固定间隔循环拉取：
 	case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
 		// Continue after a scraping offset.
 	case <-sl.ctx.Done():
@@ -1014,6 +1024,7 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	var last time.Time
 
 	alignedScrapeTime := time.Now().Round(0)
+	// interval固定间隔拉取
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1054,7 +1065,7 @@ mainLoop:
 			return
 		case <-sl.ctx.Done():
 			break mainLoop
-		case <-ticker.C:
+		case <-ticker.C: //循环周期
 		}
 	}
 
@@ -1075,6 +1086,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	// Only record after the first scrape.
 	if !last.IsZero() {
+		//非第一次抓取，记录两次抓取的实际时间差
 		targetIntervalLength.WithLabelValues(interval.String()).Observe(
 			time.Since(last).Seconds(),
 		)
@@ -1122,6 +1134,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	var contentType string
 	scrapeCtx, cancel := context.WithTimeout(sl.parentCtx, timeout)
+	//http抓取指标
 	contentType, scrapeErr = sl.scraper.scrape(scrapeCtx, buf)
 	cancel()
 
@@ -1142,6 +1155,7 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 
 	// A failed scrape is the same as an empty scrape,
 	// we still call sl.append to trigger stale markers.
+	//解析并存储
 	total, added, seriesAdded, appErr = sl.append(app, b, contentType, appendTime)
 	if appErr != nil {
 		app.Rollback()

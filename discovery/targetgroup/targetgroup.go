@@ -24,11 +24,22 @@ import (
 type Group struct {
 	// Targets is a list of targets identified by a label set. Each target is
 	// uniquely identifiable in the group by its address label.
+	//target集合，一个target一般就是一个__address__标签
 	Targets []model.LabelSet
 	// Labels is a set of labels that is common across all targets in the group.
+	//这组target公共标签
 	Labels model.LabelSet
 
 	// Source is an identifier that describes a group of targets.
+	//识别组
+	/**
+	文件服务发现如：
+	D:\prometheus\prometheus-config\targets\t1.json:0
+	D:\prometheus\prometheus-config\targets\t1.json:1
+
+	k8s role=pod服务发现：
+	pod/[namespace]/[pod_name]
+	*/
 	Source string
 }
 

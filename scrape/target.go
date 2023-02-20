@@ -47,10 +47,13 @@ const (
 // Target refers to a singular HTTP or HTTPS endpoint.
 type Target struct {
 	// Labels before any processing.
+	//服务发现标签，即未经过relabel处理的标签
 	discoveredLabels labels.Labels
 	// Any labels that are added to this target and its metrics.
+	//经过relabel处理之后标签
 	labels labels.Labels
 	// Additional URL parameters that are part of the target URL.
+	//请求参数
 	params url.Values
 
 	mtx                sync.RWMutex
@@ -153,12 +156,14 @@ func (t *Target) hash() uint64 {
 
 // offset returns the time until the next scrape cycle for the target.
 // It includes the global server jitterSeed for scrapes from multiple Prometheus to try to be at different times.
+// 不同target有不同的等待时间，这样就可以将不同target的开始时间错开。
 func (t *Target) offset(interval time.Duration, jitterSeed uint64) time.Duration {
 	now := time.Now().UnixNano()
 
 	// Base is a pinned to absolute time, no matter how often offset is called.
 	var (
-		base   = int64(interval) - now%int64(interval)
+		base = int64(interval) - now%int64(interval)
+		// target等待时间的计算方法
 		offset = (t.hash() ^ jitterSeed) % uint64(interval)
 		next   = base + int64(offset)
 	)
@@ -347,6 +352,7 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 	}
 
 	preRelabelLabels := lb.Labels()
+	//relabel_configs处理
 	lset = relabel.Process(preRelabelLabels, cfg.RelabelConfigs...)
 
 	// Check if the target was dropped.

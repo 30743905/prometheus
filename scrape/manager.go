@@ -155,6 +155,7 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 }
 
 func (m *Manager) reloader() {
+	//scrape模块加载采集点最小间隔5秒，避免采集点频繁变更导致scrape性能问题
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -177,6 +178,9 @@ func (m *Manager) reload() {
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
 	for setName, groups := range m.targetSets {
+		// targetSets是map[string][]*targetgroup.Group类型，key是job名称
+
+		//创建scrapePool，一个job对应一个scrapePool结构体实例
 		if _, ok := m.scrapePools[setName]; !ok {
 			scrapeConfig, ok := m.scrapeConfigs[setName]
 			if !ok {
@@ -204,6 +208,7 @@ func (m *Manager) reload() {
 }
 
 // setJitterSeed calculates a global jitterSeed per server relying on extra label set.
+// 不同实例的hostname/externalLabels一般不同，故计算出来的jitterSeed值也不同。
 func (m *Manager) setJitterSeed(labels labels.Labels) error {
 	h := fnv.New64a()
 	hostname, err := getFqdn()
@@ -245,17 +250,35 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	}
 	m.scrapeConfigs = c
 
+	/**
+	prometheus拉取target的metrics时，都是错开时间分别拉取的，这样有以下好处：
+		1、避免prometheus实例启动太多的goroutine同时拉取；
+		2、多prometheus实例拉取同一个target时，避免同时拉取对target造成流量压力；
+	 通过全局的scrape jitterSeed实现：
+		1、不同实例：jitterSeed是跟特定prometheus实例相关的uint64哈希值，不同实例的jitterSeed不同；
+		2、单实例不同target: 使用target哈希值与jitterSeed做异或操作，得到target拉取的启动时间，不同的target启动时间不同；
+	*/
+	// 使用全局配置来生成一个集群内不重复的seed
 	if err := m.setJitterSeed(cfg.GlobalConfig.ExternalLabels); err != nil {
 		return err
 	}
 
 	// Cleanup and reload pool if the configuration has changed.
 	var failed bool
+	// 根据解析出来的配置生成对应的ScrapePool， 如果有并且数据没有改变的话，那就不进行操作，否则
+	/**
+	下面会遍历所有的manager中存储的scrapePool，scrapePool和job是一对一关系：
+		1、如果scrapePool对应的job在配置中不存在了，则scrapePool会被停止后删除掉；
+		2、如果scrapePool对应的job配置和当前配置对比出现了变更，则将
+	*/
 	for name, sp := range m.scrapePools {
 		if cfg, ok := m.scrapeConfigs[name]; !ok {
+			//如果新配置没有该抓取job，则停止当前scrapePool
 			sp.stop()
 			delete(m.scrapePools, name)
 		} else if !reflect.DeepEqual(sp.config, cfg) {
+			//如果抓取job还在，但是和之前相比出现变更，则重新应用最新配置
+			//reload重载配置：将最新job配置设置到scrapePool中，同时scrapePool下所有target会基于最新配置重新生成并重启，因为可能涉及到认证信息、抓取路径等信息变更
 			err := sp.reload(cfg)
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error reloading scrape pool", "err", err, "scrape_pool", name)

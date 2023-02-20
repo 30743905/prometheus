@@ -323,6 +323,7 @@ const resyncPeriod = 10 * time.Minute
 // Run implements the discoverer interface.
 func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 	d.Lock()
+	//获取kubernetes_sd_configs中namespaces配置的命名空间
 	namespaces := d.getNamespaces()
 
 	switch d.role {
@@ -434,11 +435,13 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 		for _, namespace := range namespaces {
 			p := d.client.CoreV1().Pods(namespace)
 			plw := &cache.ListWatch{
+				// ListFunc就是Clientset的List函数
 				ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 					options.FieldSelector = d.selectors.pod.field
 					options.LabelSelector = d.selectors.pod.label
 					return p.List(ctx, options)
 				},
+				// WatchFunc就是Clientset的Watch函数
 				WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 					options.FieldSelector = d.selectors.pod.field
 					options.LabelSelector = d.selectors.pod.label
