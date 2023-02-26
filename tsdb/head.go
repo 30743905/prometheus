@@ -2341,6 +2341,7 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 			return false, false
 		}
 		// There is no chunk in this series yet, create the first chunk for the sample.
+		fmt.Println("------>", "head chunk null, cutNewHeadChunk", time.Now())
 		c = s.cutNewHeadChunk(t, chunkDiskMapper)
 		chunkCreated = true
 	}
@@ -2354,9 +2355,12 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	// at which to start the next chunk.
 	// At latest it must happen at the timestamp set when the chunk was cut.
 	if numSamples == samplesPerChunk/4 {
+		fmt.Println("------>", "超过1/4，开始计算memSeries.nextAt", c.minTime, c.maxTime, s.nextAt, time.Now())
 		s.nextAt = computeChunkEndTime(c.minTime, c.maxTime, s.nextAt)
+		fmt.Println("------>", "超过1/4，计算完成memSeries.nextAt", c.minTime, c.maxTime, s.nextAt, time.Now())
 	}
 	if t >= s.nextAt {
+		fmt.Println("------>", "t >= s.nextAt，cutNewHeadChunk", t, s.nextAt, time.Now())
 		c = s.cutNewHeadChunk(t, chunkDiskMapper)
 		chunkCreated = true
 	}

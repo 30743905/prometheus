@@ -445,9 +445,18 @@ func main() {
 	level.Info(logger).Log("vm_limits", prom_runtime.VMLimits())
 
 	var (
+		// Prometheus支持本地存储和远端存储
 		localStorage  = &readyStorage{}
 		scraper       = &readyScrapeManager{}
 		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), prometheus.DefaultRegisterer, localStorage.StartTime, cfg.localStoragePath, time.Duration(cfg.RemoteFlushDeadline), scraper)
+		/**
+		首先分别创建local和remote的storage instance；然后根据instances创建fanout storage。
+		其中需要注意的是local storage还没有与actual storage关联，后期TSDB加载完成后将其关联在TSDB上，此过程通过ReadyStorage.Set方法来完成。
+		见：localStorage.Set(db, startTimeMargin)
+
+		为了兼容本地存储和远端存储，Prometheus提供了fanout类，fanout实现了Storage接口
+		当执行fanout中的方法（例如Add）时，fanout会先执行本地存储(Primary)的Add方法，然后遍历执行每个远端存储(secondaries)的Add的方法。
+		*/
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 

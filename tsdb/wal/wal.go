@@ -52,10 +52,18 @@ var castagnoliTable = crc32.MakeTable(crc32.Castagnoli)
 // Records bigger than the page size are split and flushed separately.
 // A flush is triggered when a single records doesn't fit the page size or
 // when the next record can't fit in the remaining free page space.
+/**
+Prometheus为了防止丢失暂存在内存中的还未被写入磁盘的监控数据，引入了WAL机制。WAL被分割成默认大小为128M的文件段（segment）。WAL的写入单位是页（page），每页的大小为32KB，所以每个段大小必须是页的大小的整数倍。
+如果WAL一次性写入的页数超过一个段的空闲页数，就会创建一个新的文件段(segment)来保存这些页，从而确保一次性写入的页不会跨段存储。
+
+*/
 type page struct {
-	alloc   int
+	//占用字节数
+	alloc int
+	//flush到segment字节数
 	flushed int
-	buf     [pageSize]byte
+	//page
+	buf [pageSize]byte
 }
 
 func (p *page) remaining() int {
@@ -527,11 +535,13 @@ func (w *WAL) flushPage(clear bool) error {
 		p.alloc = pageSize // Write till end of page.
 	}
 
+	//真正flush到wal segment
 	n, err := w.segment.Write(p.buf[p.flushed:p.alloc])
 	if err != nil {
 		p.flushed += n
 		return err
 	}
+	//更新page的flush字节数
 	p.flushed += n
 
 	// We flushed an entire page, prepare a new one.
@@ -605,6 +615,12 @@ func (w *WAL) Log(recs ...[]byte) error {
 // - the final record of a batch
 // - the record is bigger than the page size
 // - the current page is full.
+/**
+触发page flushPage三种时机：
+	1、当前commit提交的最后一条记录(record)；
+	2、记录(record)大于`active segment`剩余空间(当前page剩余空间+active segment剩余page数量*page大小)，这时会触发创建新segment文件；
+	3、page满了(full)
+*/
 func (w *WAL) log(rec []byte, final bool) error {
 	// When the last page flush failed the page will remain full.
 	// When the page is full, need to flush it before trying to add more records to it.

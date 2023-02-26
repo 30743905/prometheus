@@ -971,6 +971,7 @@ func TestComputeChunkEndTime(t *testing.T) {
 
 func TestMemSeries_append(t *testing.T) {
 	dir, err := ioutil.TempDir("", "append")
+	fmt.Println("dir:", dir)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, os.RemoveAll(dir))

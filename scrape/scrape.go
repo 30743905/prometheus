@@ -24,6 +24,7 @@ import (
 	"math"
 	"net/http"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -1119,6 +1120,8 @@ mainLoop:
 	}
 }
 
+var idx int
+
 // scrapeAndReport performs a scrape and then appends the result to the storage
 // together with reporting metrics, by using as few appenders as possible.
 // In the happy scenario, a single appender is used.
@@ -1152,7 +1155,9 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 			return
 		}
 		//非异常下commit提交
+		fmt.Println("------>", "begin commit", time.Now())
 		err = app.Commit()
+		fmt.Println("------>", "finish commit", time.Now())
 		if err != nil {
 			level.Error(sl.l).Log("msg", "Scrape commit failed", "err", err)
 		}
@@ -1184,6 +1189,8 @@ func (sl *scrapeLoop) scrapeAndReport(interval, timeout time.Duration, last, app
 	var contentType string
 	scrapeCtx, cancel := context.WithTimeout(sl.parentCtx, timeout)
 	//http抓取指标
+	idx += 1
+	fmt.Println("------>", "begin scrape ", strconv.Itoa(idx), time.Now())
 	contentType, scrapeErr = sl.scraper.scrape(scrapeCtx, buf)
 	cancel()
 
