@@ -149,16 +149,25 @@ type xorAppender struct {
 
 func (a *xorAppender) Append(t int64, v float64) {
 	var tDelta uint64
+	//读取第1、2两个字节是sample数量
 	num := binary.BigEndian.Uint16(a.b.bytes())
 
 	if num == 0 {
+		//将时间t编码写入
 		buf := make([]byte, binary.MaxVarintLen64)
 		for _, b := range buf[:binary.PutVarint(buf, t)] {
 			a.b.writeByte(b)
 		}
+		/**
+		func Float64bits(f float64) uint64，将float64数转换成uint64
+		应该是因为在go语言中，如果对float进行位运算，会使用浮点计算单元，但是把它转换成整型（转换过程中速度很快，并不使用浮点计算单元），
+		就可以直接使用整型计算单元，相较于浮点计算单元，整型的计算会快很多，所以在API中会这么写
+		*/
+		//将值v编码写入，占用8字节
 		a.b.writeBits(math.Float64bits(v), 64)
 
 	} else if num == 1 {
+		//此处tDelta uint64保证取值非负，即timestamp不会发生乱序
 		tDelta = uint64(t - a.t)
 
 		buf := make([]byte, binary.MaxVarintLen64)
@@ -166,10 +175,21 @@ func (a *xorAppender) Append(t int64, v float64) {
 			a.b.writeByte(b)
 		}
 
+		/**
+		xor值压缩：
+			1.直接存储时序中第一个时序点value值,不做压缩
+			2.从第二个时序点开始,将value值与前一时序点value值进行XOR运算
+			3.如果XOR运算结果为0,则表示这两个时序点的Value值相同,只需要使用一个bit位存储'0'值即可
+			4.如果XOR运算结果不是0,则需要使用到2个bit值的控制位，并首先将第一个bit存储为'1'，接下来看控制位的第二个bit值
+				(a)控制位第二个bit位为'0'时,表示此次计算得到的XOR结果中间非零的部分被前一个XOR运算结果包含.例如,与前一个XOR运算结果相比,此次XOR运算结果也有同样多的前置0和同样多的尾部0,那么我们只需要存储XOR结果中非0的部分即可
+				(b)控制位第二个bit位为'1'时,需要用5个bit位来存储XOR结果中前置0的数量,然后用6个bit位来存储XOR结果中非0位的长度,最后再存储XOR的值
+		*/
 		a.writeVDelta(v)
 
 	} else {
+		//此处tDelta uint64保证取值非负，即timestamp不会发生乱序
 		tDelta = uint64(t - a.t)
+		//delta-of-delta编码存储时序
 		dod := int64(tDelta - a.tDelta)
 
 		// Gorilla has a max resolution of seconds, Prometheus milliseconds.
@@ -191,11 +211,13 @@ func (a *xorAppender) Append(t int64, v float64) {
 			a.b.writeBits(uint64(dod), 64)
 		}
 
+		//xor编码写入值v
 		a.writeVDelta(v)
 	}
 
 	a.t = t
 	a.v = v
+	//更新sample数量+1
 	binary.BigEndian.PutUint16(a.b.bytes(), num+1)
 	a.tDelta = tDelta
 }

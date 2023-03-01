@@ -1012,7 +1012,7 @@ func TestMemSeries_append(t *testing.T) {
 
 	// Fill the range [1000,2000) with many samples. Intermediate chunks should be cut
 	// at approximately 120 samples per chunk.
-	for i := 1; i < 1000; i++ {
+	for i := 1; i < 50000000; i++ {
 		ok, _ := s.append(1001+int64(i), float64(i), 0, chunkDiskMapper)
 		require.True(t, ok, "append failed")
 	}
@@ -1025,6 +1025,7 @@ func TestMemSeries_append(t *testing.T) {
 		require.NoError(t, err)
 		require.Greater(t, chk.NumSamples(), 100, "unexpected small chunk %d of length %d", i, chk.NumSamples())
 	}
+	fmt.Println("==============")
 }
 
 func TestGCChunkAccess(t *testing.T) {

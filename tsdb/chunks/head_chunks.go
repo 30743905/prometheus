@@ -183,6 +183,7 @@ func (cdm *ChunkDiskMapper) openMMapFiles() (returnErr error) {
 		return err
 	}
 
+	//删除最后一个文件，如果该文件是空的
 	chkFileIndices := make([]int, 0, len(files))
 	for seq, fn := range files {
 		f, err := fileutil.OpenMmapFile(fn)
@@ -202,11 +203,13 @@ func (cdm *ChunkDiskMapper) openMMapFiles() (returnErr error) {
 	lastSeq := chkFileIndices[0]
 	for _, seq := range chkFileIndices[1:] {
 		if seq != lastSeq+1 {
+			//不连续的头块文件则异常
 			return errors.Errorf("found unsequential head chunk files %s (index: %d) and %s (index: %d)", files[lastSeq], lastSeq, files[seq], seq)
 		}
 		lastSeq = seq
 	}
 
+	//头块文件头校验
 	for i, b := range cdm.mmappedChunkFiles {
 		if b.byteSlice.Len() < HeadChunkFileHeaderSize {
 			return errors.Wrapf(errInvalidSize, "%s: invalid head chunk file header", files[i])
@@ -245,6 +248,10 @@ func listChunkFiles(dir string) (map[int]string, error) {
 // repairLastChunkFile deletes the last file if it's empty.
 // Because we don't fsync when creating these file, we could end
 // up with an empty file at the end during an abrupt shutdown.
+/**
+repairLastChunkFile:删除最后一个文件，如果该文件是空的
+因为我们在创建这些文件时没有fsync，在突然关闭会导致产生一个空文件
+*/
 func repairLastChunkFile(files map[int]string) (_ map[int]string, returnErr error) {
 	lastFile := -1
 	for seq := range files {
